@@ -72,6 +72,7 @@ namespace Jondo.Unity.Server.Handlers
         /// </summary>
         public static async Task OpenAsync(NetworkStream stream, Interactives.Element zaap, int skillId)
         {
+            ShopHubTravelHandler.Forget();
             long here = Jondo.Unity.Server.Network.SessionContext.State.MapId;
 
             SessionContext.State.OpenZaapMapId = here;
@@ -102,6 +103,7 @@ namespace Jondo.Unity.Server.Handlers
         /// </summary>
         public static async Task CloseAsync(NetworkStream stream)
         {
+            ShopHubTravelHandler.Forget();
             SessionContext.State.OpenZaapMapId = 0;
             await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
                 ConnectionProtocol.Push(Op.Kld, ConnectionProtocol.BuildDialogClosed()));
@@ -129,6 +131,8 @@ namespace Jondo.Unity.Server.Handlers
                 else if (field.FieldNumber == 3) chosen = field.VarIntValue;
             }
             if (chosen <= 0) return;
+
+            if (await ShopHubTravelHandler.TryTravelAsync(stream, kind, chosen)) return;
 
             long from = SessionContext.State.OpenZaapMapId != 0
                 ? SessionContext.State.OpenZaapMapId

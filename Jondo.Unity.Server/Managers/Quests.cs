@@ -828,6 +828,9 @@ namespace Jondo.Unity.Server.Managers
                 // still the handing over to Dlim. Not once the cloth is carried, nor a second one.
                 if (binding.SpawnsMonster != 0 && !gave)
                 {
+                    // An attacking quest spawn may already have moved the player to its arena.
+                    // Repeated use must not spawn another group on that arena during the fight.
+                    if (SessionContext.State.IsInFight) return false;
                     var aimed = step.Objectives.First(o => o.Id == binding.ObjectiveId);
                     if (aimed.ItemId != 0 && Equipment.HowMany(aimed.ItemId) >= Math.Max(1, aimed.ItemCount)) return false;
                     if (MobSpawnManager.GetMobsForMap(SessionContext.State.MapId)

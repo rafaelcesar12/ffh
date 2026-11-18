@@ -122,6 +122,9 @@ namespace Jondo.Unity.Server.Handlers
             }
 
             // «Intercambiar» on an NPC who swaps things: Gobiere Trokeur's barter, not a shop.
+            if (await ShopHubTravelHandler.OpenAsync(stream, npc, mapId)) return;
+            ShopHubTravelHandler.Forget();
+
             if (action == Npcs.TradeCosmetics && NpcBarterHandler.Barters(npc.NpcId))
             {
                 await NpcBarterHandler.OpenAsync(stream, npc.NpcId, npc.ContextualId);
@@ -166,7 +169,7 @@ namespace Jondo.Unity.Server.Handlers
             // If this vendor charges in tokens, the client is told which the currency is. Without
             // this f3 does not travel and the client draws the price in kamas, which is the usual.
             var tokenShop = TokenShops.Of(npc.NpcId);
-            byte[] kbd = ConnectionProtocol.BuildShop(npc.ContextualId, catalogue, tokenShop);
+            byte[] kbd = ConnectionProtocol.BuildShop(npc.ContextualId, catalogue, tokenShop, ShopHub.UnitPrice(npc.NpcId));
             await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
                 ConnectionProtocol.Push(Op.Kbd, kbd));
 
@@ -2023,7 +2026,7 @@ namespace Jondo.Unity.Server.Handlers
 
             // What is paid with here. Without a token shop it is the usual: kamas.
             var tokenShop = TokenShops.Of(OpenShopNpc);
-            long unit = tokenShop == null ? NpcShops.PriceOf(gid) : TokenShops.PriceOf(tokenShop, gid);
+            long unit = tokenShop == null ? ShopHub.UnitPrice(OpenShopNpc) ?? NpcShops.PriceOf(gid) : TokenShops.PriceOf(tokenShop, gid);
             long price;
             try
             {

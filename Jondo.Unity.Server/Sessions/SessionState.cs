@@ -210,6 +210,9 @@ namespace Jondo.Unity.Server
         /// <summary>The map of the zaap open right now, to charge from the right place.</summary>
         public long OpenZaapMapId { get; set; }
 
+        /// <summary>Only the dungeon destinations offered to this session by the test hub NPC.</summary>
+        internal HashSet<long> OpenHubDungeonMaps { get; set; } = new();
+
         /// <summary>
         /// Which door the house one is in was entered through, to leave through that same one.
         ///

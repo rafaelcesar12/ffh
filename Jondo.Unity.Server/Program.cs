@@ -212,6 +212,7 @@ namespace Jondo.Unity.Server
             // Behind the NPCs too, and for the same reason: the bankers are found in their templates.
             Managers.Bankers.Initialize();
             Managers.NpcShops.Initialize();
+            Managers.ShopHub.Load();
             // After Npcs because the quests hang from their dialogues, and the catalogue is
             // Ankama's and does not change: it is read once and all the sessions share it.
             Managers.Quests.Load();
