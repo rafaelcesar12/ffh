@@ -15,6 +15,7 @@ internal static class ShopHub
     internal static void Load()
     {
         Enabled = false;
+        HubItems = new HashSet<int>();
         string path = Paths.ContentFile("npcs/shop_hub.json");
         if (!File.Exists(path)) return;
         using var doc = JsonDocument.Parse(File.ReadAllText(path));
@@ -31,10 +32,29 @@ internal static class ShopHub
         foreach (int npc in new[] { RuneSeller, PotionSeller, DungeonGuide })
             if (!Npcs.Of(MapId).Any(spawn => spawn.NpcId == npc))
                 throw new InvalidDataException($"Local shop hub NPC {npc} is missing.");
+        HubItems = NpcShops.CatalogueOf(RuneSeller).Concat(NpcShops.CatalogueOf(PotionSeller)).ToHashSet();
         Enabled = true;
         Console.WriteLine($"[ShopHub] {NpcShops.CatalogueOf(RuneSeller).Count} runes, "
-            + $"{NpcShops.CatalogueOf(PotionSeller).Count} potions, one kama per item.");
+            + $"{NpcShops.CatalogueOf(PotionSeller).Count} potions, one kama per item; "
+            + $"resale of those {HubItems.Count} items capped at one kama.");
     }
+
+    /// <summary>Every item the two one-kama sellers offer, whichever vendor it is later sold to.</summary>
+    internal static IReadOnlySet<int> HubItems { get; private set; } = new HashSet<int>();
+
+    /// <summary>
+    /// What a vendor pays for a sale, closing the loop «buy at one kama, sell back at a tenth of the
+    /// template price»: while the hub is on, its items never sell back for more than they cost here.
+    /// Items are not marked with where they came from, so a dropped or crafted copy is capped too;
+    /// that is the price of a test server where they can be bought for one kama anyway.
+    /// </summary>
+    internal static long BuyBack(int gid, int quantity)
+        => CapBuyBack(Enabled, HubItems, gid, quantity, NpcShops.BuyBackOf(gid, quantity));
+
+    internal static long CapBuyBack(bool enabled, IReadOnlySet<int> hubItems, int gid, int quantity, long normal)
+        => enabled && hubItems.Contains(gid) ? Math.Min(normal, HubUnitPrice * quantity) : normal;
+
+    private const long HubUnitPrice = 1;
 
     internal static long? UnitPrice(int npcId)
         => PriceFor(Enabled, npcId);

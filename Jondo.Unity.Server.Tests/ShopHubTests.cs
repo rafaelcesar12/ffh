@@ -74,6 +74,20 @@ public sealed class ShopHubTests
         Assert.Equal(1, Price(ConnectionProtocol.BuildShop(-20001, new[] { item })));
     }
 
+    [Fact]
+    public void Hub_items_never_sell_back_for_more_than_they_cost_while_the_hub_is_on()
+    {
+        var hub = new HashSet<int> { 20155 };
+        // A potion bought for one kama whose template would pay 200 a unit.
+        Assert.Equal(1, ShopHub.CapBuyBack(true, hub, 20155, 1, 200));
+        Assert.Equal(5, ShopHub.CapBuyBack(true, hub, 20155, 5, 5 * 200));
+        // Never raised: a cheaper resale stays as it was (zero stays zero).
+        Assert.Equal(0, ShopHub.CapBuyBack(true, hub, 20155, 3, 0));
+        // Hub off, or an item the hub does not sell: the normal tenth of the template price.
+        Assert.Equal(200, ShopHub.CapBuyBack(false, hub, 20155, 1, 200));
+        Assert.Equal(1290, ShopHub.CapBuyBack(true, hub, 12900, 1, 1290));
+    }
+
     private static long Price(byte[] payload)
     {
         var entry = ProtoMessage.Parse(ProtoMessage.Parse(payload).Fields.Single(f => f.FieldNumber == 1).BytesValue);

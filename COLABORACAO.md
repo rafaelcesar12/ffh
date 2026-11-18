@@ -32,3 +32,4 @@ confirmar antes de reiniciar, sem senhas) estão no manual
 | 2026-11-16 | Codex | main | Hub de testes: runas/poções a 1 kama e guia de calabouços | ver commit f882b659 | concluída, instalada |
 | 2026-11-17 | Codex | — | Vendedor de runas 269 → 408 (direto na instalação) | content/npcs/spawns.json | instalada |
 | 2026-11-17 | Claude | main | Reconciliar célula 408 no código; criar este repositório | content/npcs/spawns.json, COLABORACAO.md | concluída |
+| 2026-11-17 | Claude | claude/hub-revenda | Revenda dos itens do hub limitada a 1 kama (36 poções davam lucro) | Managers/ShopHub.cs, Handlers/NpcHandler.cs, ShopHubTests.cs | aguardando revisão do Codex; não instalada |

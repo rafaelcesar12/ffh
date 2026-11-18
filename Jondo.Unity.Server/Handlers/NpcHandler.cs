@@ -2209,7 +2209,7 @@ namespace Jondo.Unity.Server.Handlers
                 if (!DatabaseManager.DestroyCharacterItem(GameState.CharacterId, uid, quantity)) continue;
                 Equipment.Remove(uid, quantity);
 
-                long price = NpcShops.BuyBackOf(item.Template, quantity);
+                long price = ShopHub.BuyBack(item.Template, quantity);
                 GameState.Kamas += price;
                 earned += price;
                 sold++;
