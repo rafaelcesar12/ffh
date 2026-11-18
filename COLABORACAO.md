@@ -1,8 +1,9 @@
 # Colaboração Claude + Codex neste repositório
 
 Repositório local do servidor Jondo de testes do Rafael. Base: `Keka-Bron/JondoEmu`, commit
-`412f66ad` (v1.0.9). O remoto `upstream` aponta para o projeto original; `origin` será o
-repositório privado do Rafael no GitHub.
+`412f66ad` (v1.0.9). O remoto `upstream` aponta para o projeto original; `origin` é o
+repositório privado https://github.com/rafaelcesar12/jondo-local (só o Rafael tem acesso).
+Comece cada tarefa com `git pull` e envie a branch com `git push -u origin <branch>`.
 
 As regras gerais (não tocar na instalação oficial da Ankama, sem mods, preservar contas,
 confirmar antes de reiniciar, sem senhas) estão no manual
