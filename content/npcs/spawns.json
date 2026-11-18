@@ -5724,6 +5724,83 @@
       "cell": 296,
       "orientation": 3,
       "why": "Local test hub, stock client NPC template; no client modification."
+    },
+    {
+      "map": 88212758,
+      "npc": 35,
+      "cell": 239,
+      "orientation": 1,
+      "why": "FFH resource shop: stock client NPC template, catalogue from tools/gerar_loja_recursos.py; one kama and resale capped by ShopHub. Shop: Coleta."
+    },
+    {
+      "map": 88212758,
+      "npc": 313,
+      "cell": 240,
+      "orientation": 1,
+      "why": "FFH resource shop: stock client NPC template, catalogue from tools/gerar_loja_recursos.py; one kama and resale capped by ShopHub. Shop: Drops de monstro I."
+    },
+    {
+      "map": 88212758,
+      "npc": 314,
+      "cell": 241,
+      "orientation": 1,
+      "why": "FFH resource shop: stock client NPC template, catalogue from tools/gerar_loja_recursos.py; one kama and resale capped by ShopHub. Shop: Drops de monstro II."
+    },
+    {
+      "map": 88212758,
+      "npc": 401,
+      "cell": 242,
+      "orientation": 1,
+      "why": "FFH resource shop: stock client NPC template, catalogue from tools/gerar_loja_recursos.py; one kama and resale capped by ShopHub. Shop: Recursos variados I."
+    },
+    {
+      "map": 88212758,
+      "npc": 1456,
+      "cell": 243,
+      "orientation": 1,
+      "why": "FFH resource shop: stock client NPC template, catalogue from tools/gerar_loja_recursos.py; one kama and resale capped by ShopHub. Shop: Recursos variados II."
+    },
+    {
+      "map": 88212758,
+      "npc": 1457,
+      "cell": 244,
+      "orientation": 1,
+      "why": "FFH resource shop: stock client NPC template, catalogue from tools/gerar_loja_recursos.py; one kama and resale capped by ShopHub. Shop: Alquimia e criacao."
+    },
+    {
+      "map": 88212758,
+      "npc": 1550,
+      "cell": 245,
+      "orientation": 1,
+      "why": "FFH resource shop: stock client NPC template, catalogue from tools/gerar_loja_recursos.py; one kama and resale capped by ShopHub. Shop: Masmorra e especiais."
+    },
+    {
+      "map": 88212758,
+      "npc": 3367,
+      "cell": 246,
+      "orientation": 1,
+      "why": "FFH resource shop: stock client NPC template, catalogue from tools/gerar_loja_recursos.py; one kama and resale capped by ShopHub. Shop: Forjamagia e montaria."
+    },
+    {
+      "map": 88212758,
+      "npc": 4000,
+      "cell": 428,
+      "orientation": 1,
+      "why": "FFH resource shop: stock client NPC template, catalogue from tools/gerar_loja_recursos.py; one kama and resale capped by ShopHub. Shop: Chaves e missao."
+    },
+    {
+      "map": 88212758,
+      "npc": 4754,
+      "cell": 429,
+      "orientation": 1,
+      "why": "FFH resource shop: stock client NPC template, catalogue from tools/gerar_loja_recursos.py; one kama and resale capped by ShopHub. Shop: Mapas I."
+    },
+    {
+      "map": 88212758,
+      "npc": 5231,
+      "cell": 430,
+      "orientation": 1,
+      "why": "FFH resource shop: stock client NPC template, catalogue from tools/gerar_loja_recursos.py; one kama and resale capped by ShopHub. Shop: Mapas II."
     }
   ]
 }

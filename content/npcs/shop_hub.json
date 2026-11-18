@@ -4,5 +4,19 @@
   "runeSeller": 7379,
   "potionSeller": 166,
   "dungeonGuide": 7575,
-  "unitPrice": 1
+  "unitPrice": 1,
+  "resourceMap": 88212758,
+  "resourceSellers": [
+    35,
+    313,
+    314,
+    401,
+    1456,
+    1457,
+    1550,
+    3367,
+    4000,
+    4754,
+    5231
+  ]
 }

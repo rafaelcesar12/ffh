@@ -18,6 +18,55 @@ public sealed class ShopHubTests
         Assert.Null(ShopHub.PriceFor(true, ShopHub.DungeonGuide));
     }
 
+    [Fact]
+    public void Resource_sellers_sell_at_one_kama_only_while_the_hub_is_on()
+    {
+        var resources = new HashSet<int> { 313 };
+        Assert.Equal(1, ShopHub.PriceFor(true, 313, resources));
+        Assert.Null(ShopHub.PriceFor(false, 313, resources));
+        Assert.Null(ShopHub.PriceFor(true, 314, resources));
+        Assert.Null(ShopHub.PriceFor(true, 313));
+    }
+
+    [Fact]
+    public void Resource_shop_catalogues_fit_the_client_and_never_overlap()
+    {
+        string content = Path.Combine(RepoRoot(), "content", "npcs");
+        using var hub = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(content, "shop_hub.json")));
+        var sellers = hub.RootElement.GetProperty("resourceSellers").EnumerateArray().Select(e => e.GetInt32()).ToHashSet();
+        long map = hub.RootElement.GetProperty("resourceMap").GetInt64();
+        Assert.Equal(11, sellers.Count);
+
+        using var shops = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(content, "shops.json")));
+        var seen = new HashSet<int>();
+        int written = 0;
+        foreach (var shop in shops.RootElement.GetProperty("shops").EnumerateArray())
+        {
+            if (!sellers.Contains(shop.GetProperty("npc").GetInt32())) continue;
+            written++;
+            var items = shop.GetProperty("items").EnumerateArray().ToArray();
+            Assert.InRange(items.Length, 1, 444);
+            foreach (var item in items)
+            {
+                Assert.False(item.TryGetProperty("price", out _), "a written price would change it everywhere");
+                Assert.True(seen.Add(item.GetProperty("gid").GetInt32()));
+            }
+        }
+        Assert.Equal(sellers.Count, written);
+
+        using var spawns = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(content, "spawns.json")));
+        var placed = spawns.RootElement.GetProperty("spawns").EnumerateArray()
+            .Where(s => s.GetProperty("map").GetInt64() == map).Select(s => s.GetProperty("npc").GetInt32()).ToHashSet();
+        Assert.Subset(placed, sellers);
+    }
+
+    private static string RepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null && !Directory.Exists(Path.Combine(dir.FullName, "content", "npcs"))) dir = dir.Parent;
+        return dir?.FullName ?? throw new DirectoryNotFoundException("content/npcs");
+    }
+
     [Theory]
     [InlineData(true, 88212759, 88212759, 7575, false, true)]
     [InlineData(false, 88212759, 88212759, 7575, false, false)]

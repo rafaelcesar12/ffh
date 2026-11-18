@@ -16,6 +16,7 @@ internal static class ShopHub
     {
         Enabled = false;
         HubItems = new HashSet<int>();
+        ResourceSellers = new HashSet<int>();
         string path = Paths.ContentFile("npcs/shop_hub.json");
         if (!File.Exists(path)) return;
         using var doc = JsonDocument.Parse(File.ReadAllText(path));
@@ -32,12 +33,41 @@ internal static class ShopHub
         foreach (int npc in new[] { RuneSeller, PotionSeller, DungeonGuide })
             if (!Npcs.Of(MapId).Any(spawn => spawn.NpcId == npc))
                 throw new InvalidDataException($"Local shop hub NPC {npc} is missing.");
-        HubItems = NpcShops.CatalogueOf(RuneSeller).Concat(NpcShops.CatalogueOf(PotionSeller)).ToHashSet();
+        var resourceSellers = ReadResourceSellers(root);
+        HubItems = NpcShops.CatalogueOf(RuneSeller).Concat(NpcShops.CatalogueOf(PotionSeller))
+            .Concat(resourceSellers.SelectMany(NpcShops.CatalogueOf)).ToHashSet();
+        ResourceSellers = resourceSellers;
         Enabled = true;
         Console.WriteLine($"[ShopHub] {NpcShops.CatalogueOf(RuneSeller).Count} runes, "
-            + $"{NpcShops.CatalogueOf(PotionSeller).Count} potions, one kama per item; "
-            + $"resale of those {HubItems.Count} items capped at one kama.");
+            + $"{NpcShops.CatalogueOf(PotionSeller).Count} potions, "
+            + $"{resourceSellers.Sum(npc => NpcShops.CatalogueOf(npc).Count)} resources in {resourceSellers.Count} shops, "
+            + $"one kama per item; resale of those {HubItems.Count} items capped at one kama.");
     }
+
+    /// <summary>
+    /// The FFH resource shop on [-1,1] (tools/gerar_loja_recursos.py): optional. A seller that is
+    /// not in order -- no catalogue, not on its map, or one of the hub's own NPCs -- is left out with
+    /// a warning instead of stopping the server: it then sells at its catalogue price, if any.
+    /// </summary>
+    private static IReadOnlySet<int> ReadResourceSellers(JsonElement root)
+    {
+        var sellers = new HashSet<int>();
+        if (!root.TryGetProperty("resourceSellers", out var list)) return sellers;
+        long map = root.TryGetProperty("resourceMap", out var m) ? m.GetInt64() : 0;
+        foreach (int npc in list.EnumerateArray().Select(npc => npc.GetInt32()))
+        {
+            string? problem = npc is RuneSeller or PotionSeller or DungeonGuide ? "is already a hub NPC"
+                : NpcShops.CatalogueOf(npc).Count == 0 ? "has no catalogue"
+                : !Npcs.Of(map).Any(spawn => spawn.NpcId == npc) ? $"is not on map {map}"
+                : null;
+            if (problem == null) sellers.Add(npc);
+            else Console.WriteLine($"[ShopHub] Resource seller {npc} {problem}; left out.");
+        }
+        return sellers;
+    }
+
+    /// <summary>The resource shop's sellers, one kama per item like the rune and potion sellers.</summary>
+    internal static IReadOnlySet<int> ResourceSellers { get; private set; } = new HashSet<int>();
 
     /// <summary>Every item the two one-kama sellers offer, whichever vendor it is later sold to.</summary>
     internal static IReadOnlySet<int> HubItems { get; private set; } = new HashSet<int>();
@@ -57,10 +87,11 @@ internal static class ShopHub
     private const long HubUnitPrice = 1;
 
     internal static long? UnitPrice(int npcId)
-        => PriceFor(Enabled, npcId);
+        => PriceFor(Enabled, npcId, ResourceSellers);
 
-    internal static long? PriceFor(bool enabled, int npcId)
-        => enabled && (npcId == RuneSeller || npcId == PotionSeller) ? 1L : null;
+    internal static long? PriceFor(bool enabled, int npcId, IReadOnlySet<int>? resourceSellers = null)
+        => enabled && (npcId == RuneSeller || npcId == PotionSeller || resourceSellers?.Contains(npcId) == true)
+            ? 1L : null;
 
     internal static bool CanOpenGuide(bool enabled, long currentMap, long requestedMap, int npcId, bool inFight)
         => enabled && !inFight && currentMap == MapId && requestedMap == MapId && npcId == DungeonGuide;
