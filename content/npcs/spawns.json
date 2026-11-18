@@ -5707,7 +5707,7 @@
     {
       "map": 88212759,
       "npc": 7379,
-      "cell": 269,
+      "cell": 408,
       "orientation": 3,
       "why": "Local test hub, stock client NPC template; no client modification."
     },
