@@ -51,7 +51,7 @@ internal static class ServerTheme
     {
         var dialog = new Window
         {
-            Title = "Jondo Server", Width = 500, SizeToContent = SizeToContent.Height,
+            Title = "FFH Server", Width = 500, SizeToContent = SizeToContent.Height,
             CanResize = false, ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.CenterOwner,
         };
         Window(dialog);

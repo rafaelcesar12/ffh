@@ -309,7 +309,10 @@ namespace Jondo.Unity.Server.Handlers
                     if (item.Template == Forgemagic.SignatureRune)
                         bench.SignatureSlot = (uid, true);
                     else if (Forgemagic.RuneOf(item.Template) != null || Forgemagic.TranscendenceOf(item.Template) != null)
+                    {
                         bench.RuneSlot = (uid, true);
+                        bench.RuneSlotQuantity = Math.Max(1, Math.Min(quantity, item.Quantity));
+                    }
                     else if (template != null && SkillManager.TryGet(commission.SkillId, out var skill)
                              && (skill.ModifiableItemTypeIds.Contains(template.Type) || me.State.ForgeGod)
                              && bench.Item == 0)
@@ -328,7 +331,7 @@ namespace Jondo.Unity.Server.Handlers
 
                 // Back to the offer.
                 if (bench.Item == uid) bench.Item = 0;
-                else if (bench.RuneSlot?.Uid == uid && bench.RuneSlot.Value.Customers) bench.RuneSlot = null;
+                else if (bench.RuneSlot?.Uid == uid && bench.RuneSlot.Value.Customers) { bench.RuneSlot = null; bench.RuneSlotQuantity = 0; }
                 else if (bench.SignatureSlot?.Uid == uid && bench.SignatureSlot.Value.Customers) bench.SignatureSlot = null;
                 else return;
 

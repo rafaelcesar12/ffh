@@ -1858,6 +1858,13 @@ namespace Jondo.Unity.Server
             open.Parameters.AddWithValue("$status", ServerStatusOnline);
             open.ExecuteNonQuery();
 
+            // A database seeded under the old name keeps its row: only the name is brought up to date.
+            var rename = connection.CreateCommand();
+            rename.CommandText = "UPDATE Servers SET Name = $name WHERE Id = $id AND Name <> $name;";
+            rename.Parameters.AddWithValue("$id", DefaultServerId);
+            rename.Parameters.AddWithValue("$name", DefaultServerName);
+            rename.ExecuteNonQuery();
+
             foreach (var (id, type) in closed)
             {
                 var cmd = connection.CreateCommand();
@@ -1872,8 +1879,11 @@ namespace Jondo.Unity.Server
             }
         }
 
-        /// <summary>Name of the open server. Only used by the emulator's own logs.</summary>
-        public const string DefaultServerName = "Tal Kasha";
+        /// <summary>
+        /// Name of the open server: the emulator's logs and the HTTP server list. The game's own
+        /// selection screen still draws the name the client's data gives id 290.
+        /// </summary>
+        public const string DefaultServerName = "FFH";
 
         public static List<DbServer> GetServers()
         {

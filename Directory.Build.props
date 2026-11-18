@@ -7,8 +7,8 @@
       anonymous binary looks to an antivirus's heuristics. The version comes from the release
       (-p:Version in release.yml).
     -->
-    <Company>Jondo</Company>
-    <Product>Jondo Emulator</Product>
+    <Company>FFH</Company>
+    <Product>FFH Server (based on Jondo Emulator)</Product>
     <Authors>Jondo contributors</Authors>
     <Copyright>Copyright (c) Jondo contributors</Copyright>
     <NeutralLanguage>en</NeutralLanguage>

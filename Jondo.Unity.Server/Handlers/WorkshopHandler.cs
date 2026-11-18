@@ -100,6 +100,12 @@ namespace Jondo.Unity.Server.Handlers
             /// <summary>The rune laid on the magus table, and whether it is the customer's.</summary>
             public (long Uid, bool Customers)? RuneSlot { get; set; }
 
+            /// <summary>
+            /// How many runes of that stack are laid in the slot. As on the official servers, a whole
+            /// stack can wait there: each fusion spends one and the rest stays for the next.
+            /// </summary>
+            public int RuneSlotQuantity { get; set; }
+
             /// <summary>The signature rune laid on the magus table, and whether it is the customer's.</summary>
             public (long Uid, bool Customers)? SignatureSlot { get; set; }
         }
@@ -565,7 +571,19 @@ namespace Jondo.Unity.Server.Handlers
 
             if (delta < 0)
             {
-                if (bench.RuneSlot?.Uid == uid && !bench.RuneSlot.Value.Customers) bench.RuneSlot = null;
+                if (bench.RuneSlot?.Uid == uid && !bench.RuneSlot.Value.Customers)
+                {
+                    // Taking some runes back out leaves the rest in the slot.
+                    int left = SlotQuantity(bench.RuneSlotQuantity, delta, item?.Position == Equipment.Bag ? item.Quantity : 0);
+                    if (left > 0)
+                    {
+                        bench.RuneSlotQuantity = left;
+                        await SendRuneSlotAsync(stream, customer, item!, left);
+                        return;
+                    }
+                    bench.RuneSlot = null;
+                    bench.RuneSlotQuantity = 0;
+                }
                 else if (bench.SignatureSlot?.Uid == uid && !bench.SignatureSlot.Value.Customers) bench.SignatureSlot = null;
                 else if (bench.Item == uid && bench.Commission == null) bench.Item = 0;
                 else return;
@@ -580,15 +598,32 @@ namespace Jondo.Unity.Server.Handlers
             {
                 bool signature = item.Template == Forgemagic.SignatureRune;
                 var slot = signature ? bench.SignatureSlot : bench.RuneSlot;
+
+                // More of the same stack: the slot grows, up to what the bag holds.
+                if (!signature && slot is { Customers: false } same && same.Uid == uid)
+                {
+                    int more = SlotQuantity(bench.RuneSlotQuantity, delta, item.Quantity);
+                    if (more == bench.RuneSlotQuantity) return;
+                    bench.RuneSlotQuantity = more;
+                    await SendRuneSlotAsync(stream, customer, item, more);
+                    return;
+                }
+
                 if (slot != null)
                 {
                     await SendAsync(stream, Op.Kfs, WorkshopProtocol.BuildRemoved(slot.Value.Uid));
                     await SendAsync(customer, Op.Kfs, WorkshopProtocol.BuildRemoved(slot.Value.Uid, remote: true));
                 }
+                // The signature signs one fusion; a rune slot takes as many as were dragged.
+                int laid = signature ? 1 : SlotQuantity(0, delta, item.Quantity);
                 if (signature) bench.SignatureSlot = (uid, false);
-                else bench.RuneSlot = (uid, false);
-                await SendAsync(stream, Op.Kfb, WorkshopProtocol.BuildAdded(item.Template, item.Effects, 1, uid, withFloat));
-                await SendAsync(customer, Op.Kfb, WorkshopProtocol.BuildAdded(item.Template, item.Effects, 1, uid, false, remote: true));
+                else
+                {
+                    bench.RuneSlot = (uid, false);
+                    bench.RuneSlotQuantity = laid;
+                }
+                await SendAsync(stream, Op.Kfb, WorkshopProtocol.BuildAdded(item.Template, item.Effects, laid, uid, withFloat));
+                await SendAsync(customer, Op.Kfb, WorkshopProtocol.BuildAdded(item.Template, item.Effects, laid, uid, false, remote: true));
                 return;
             }
 
@@ -606,6 +641,23 @@ namespace Jondo.Unity.Server.Handlers
                 await SendAsync(stream, Op.Kfs, WorkshopProtocol.BuildRemoved(bench.Item));
             bench.Item = uid;
             await SendAsync(stream, Op.Kfb, WorkshopProtocol.BuildAdded(item.Template, item.Effects, 1, uid));
+        }
+
+        /// <summary>How many runes the slot holds after a drag of <paramref name="delta"/>: never more than the stack.</summary>
+        internal static int SlotQuantity(int had, int delta, int stack)
+            => (int)Math.Clamp((long)had + delta, 0, Math.Max(0, stack));
+
+        /// <summary>
+        /// What stays in the slot after a fusion: one fewer, unless the Almanax spared the rune, and
+        /// never more than is left of the stack.
+        /// </summary>
+        internal static int SlotAfterFusion(int had, bool spared, int stackLeft)
+            => Math.Max(0, Math.Min(spared ? had : had - 1, stackLeft));
+
+        private static async Task SendRuneSlotAsync(NetworkStream stream, GameSession? customer, Equipment.Item rune, int quantity)
+        {
+            await SendAsync(stream, Op.Kex, WorkshopProtocol.BuildModified(rune.Template, rune.Effects, quantity, rune.Uid));
+            await SendAsync(customer, Op.Kex, WorkshopProtocol.BuildModified(rune.Template, rune.Effects, quantity, rune.Uid, remote: true));
         }
 
         /// <summary>kcj: one rune out of the bag, straight onto the item on the magus table.</summary>
@@ -636,8 +688,11 @@ namespace Jondo.Unity.Server.Handlers
             if (rune == null || rune.Position != Equipment.Bag)
             {
                 bench.RuneSlot = null;
+                bench.RuneSlotQuantity = 0;
                 return;
             }
+            // Nothing recorded (an older path laid it): it holds one, as it always did.
+            if (bench.RuneSlotQuantity <= 0) bench.RuneSlotQuantity = 1;
             await ApplyAsync(stream, bench, owner, rune, typed: false);
         }
 
@@ -762,17 +817,30 @@ namespace Jondo.Unity.Server.Handlers
                     ? Managers.Almanax.BonusPercent(Managers.Almanax.BonusType.RuneKept,
                                                     Managers.Almanax.Where.AtWork(magus.ParentJobId, bench.SkillId))
                     : 0;
-                bool runeSpent = (kept > 0 && Dice.Next(100) < kept) || await ConsumeAsync(runeOwner, rune, 1);
+                bool spared = kept > 0 && Dice.Next(100) < kept;
+                bool runeSpent = spared || await ConsumeAsync(runeOwner, rune, 1);
                 if (!runeSpent)
                 {
                     // A rune that could not be spent does nothing to the item.
-                    if (!typed) bench.RuneSlot = null;
+                    if (!typed) { bench.RuneSlot = null; bench.RuneSlotQuantity = 0; }
                     Console.WriteLine($"[Workshop] Rune {rune.Template} could not be spent; the item is left as it was.");
                     return;
                 }
-                await SendAsync(stream, Op.Kfs, WorkshopProtocol.BuildRemoved(runeUid));
-                await SendAsync(customer, Op.Kfs, WorkshopProtocol.BuildRemoved(runeUid, remote: true));
-                if (!typed) bench.RuneSlot = null;
+                // A slot laid with several runes keeps the rest for the next fusion.
+                var stackLeft = CommissionHandler.As(runeOwner, () => Equipment.ByUid(runeUid));
+                int stillLaid = typed ? 0 : SlotAfterFusion(bench.RuneSlotQuantity, spared,
+                    stackLeft?.Position == Equipment.Bag ? stackLeft.Quantity : 0);
+                if (stillLaid > 0)
+                {
+                    bench.RuneSlotQuantity = stillLaid;
+                    await SendRuneSlotAsync(stream, customer, stackLeft!, stillLaid);
+                }
+                else
+                {
+                    await SendAsync(stream, Op.Kfs, WorkshopProtocol.BuildRemoved(runeUid));
+                    await SendAsync(customer, Op.Kfs, WorkshopProtocol.BuildRemoved(runeUid, remote: true));
+                    if (!typed) { bench.RuneSlot = null; bench.RuneSlotQuantity = 0; }
+                }
 
                 // 4. So is the signature laid beside it.
                 if (signature != null && signatureOwner != null)

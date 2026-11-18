@@ -662,7 +662,7 @@ namespace Jondo.Unity.Server.Handlers
 
             Console.WriteLine($"[{(koliseo ? "Koliseo" : "PvP")}] Fight #{fightId} on map " +
                               $"{arenaMapId}: {blue.Count + blueBots.Count} against {red.Count + redBots.Count}" +
-                              (blueBots.Count + redBots.Count > 0 ? $", {blueBots.Count + redBots.Count} JondoBot(s)." : "."));
+                              (blueBots.Count + redBots.Count > 0 ? $", {blueBots.Count + redBots.Count} FFHBot(s)." : "."));
             return true;
         }
 

@@ -566,7 +566,7 @@ namespace Jondo.Unity.Server.Handlers
         /// authentication gives the account's own client.
         /// </summary>
         public static (string Name, string Tag) AccountTagOf(long accountId)
-            => (DatabaseManager.GetAccountById(accountId)?.Nickname ?? "Jondo",
+            => (DatabaseManager.GetAccountById(accountId)?.Nickname ?? "FFH",
                 GameServerProxy.BuildAccountTag(accountId));
 
         /// <summary>

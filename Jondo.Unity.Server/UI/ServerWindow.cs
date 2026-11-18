@@ -38,7 +38,7 @@ internal sealed class ServerWindow : Window
         _requestShutdown = requestShutdown;
         _log = log;
         _language = initialLanguage;
-        Title = "Jondo Server";
+        Title = "FFH Server";
         Width = 1280; Height = 760; MinWidth = 900; MinHeight = 560;
         WindowState = WindowState.Maximized;
         ServerTheme.Window(this);
@@ -59,7 +59,7 @@ internal sealed class ServerWindow : Window
 
         var layout = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto"), Margin = new Thickness(18) };
         var header = new StackPanel { Margin = new Thickness(8, 0, 0, 16), Spacing = 2 };
-        var logo = ServerTheme.Text("JONDO  SERVER", 32, LauncherPalette.LightGold);
+        var logo = ServerTheme.Text("FFH  SERVER", 32, LauncherPalette.LightGold);
         logo.FontWeight = FontWeight.Bold;
         header.Children.Add(logo);
         header.Children.Add(_state);

@@ -39,7 +39,7 @@ namespace Jondo.Unity.Server.Bots
         public const int Most = 200;
 
         /// <summary>A bot's character name: JondoBot- and its number.</summary>
-        public const string NamePrefix = "JondoBot-";
+        public const string NamePrefix = "FFHBot-";
 
         private const string LoginPrefix = "jondobot-";
 
