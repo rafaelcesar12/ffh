@@ -127,6 +127,48 @@ namespace Jondo.Unity.Tests.World
             Assert.Contains(900500, WantedPosters.Due(now + (long)away.TotalMilliseconds).Select(c => c.Monster));
         }
 
+        /// <summary>FFH: beaten by anybody, he stays away the capture's hours; and only some come back.</summary>
+        [Fact]
+        public void Ffh_settings_keep_a_beaten_criminal_away_and_let_only_some_come_back()
+        {
+            var previous = ServerSettings.Current;
+            try
+            {
+                LoadTwo();
+                const long now = 1_000_000_000;
+                ServerSettings.UseForTests(new() { WantedBeatenStaysAway = true, WantedChancePercent = 25, WantedRetryMinutes = 60 });
+
+                // Beaten by nobody who wanted him: hours, not the two minutes' grace.
+                WantedPosters.Placed(900500, 77, -5);
+                WantedPosters.Released(77, -5, now, beaten: true);
+                long early = now + (long)(WantedPosters.Absence - WantedPosters.AbsenceSpread).TotalMilliseconds - 1;
+                long late = now + (long)(WantedPosters.Absence + WantedPosters.AbsenceSpread).TotalMilliseconds;
+                Assert.DoesNotContain(900500, WantedPosters.Due(early).Select(c => c.Monster));
+                Assert.Contains(900500, WantedPosters.Due(late).Select(c => c.Monster));
+
+                // A group that leaves without a fight -- a map emptied -- still lets him back after the grace.
+                WantedPosters.Placed(900501, 88, -9);
+                WantedPosters.Released(88, -9, now);
+                Assert.Contains(900501, WantedPosters.Due(now + (long)WantedPosters.Grace.TotalMilliseconds).Select(c => c.Monster));
+
+                // A quarter come back; the rest wait an hour for their next chance.
+                var dice = new Random(7);
+                int back = Enumerable.Range(0, 4000).Count(_ => WantedPosters.ComesBack(900501, now, dice));
+                Assert.InRange(back, 850, 1150);
+                Assert.False(Enumerable.Range(0, 50).All(_ => WantedPosters.ComesBack(900501, now, dice)));
+                Assert.DoesNotContain(900501, WantedPosters.Due(now + 3_600_000 - 1).Select(c => c.Monster));
+                Assert.Contains(900501, WantedPosters.Due(now + 3_600_000).Select(c => c.Monster));
+
+                // The game's own settings: every one comes back, the grace is two minutes.
+                ServerSettings.UseForTests(new());
+                Assert.All(Enumerable.Range(0, 100), _ => Assert.True(WantedPosters.ComesBack(900500, now, dice)));
+                WantedPosters.Placed(900500, 77, -5);
+                WantedPosters.Released(77, -5, late, beaten: true);
+                Assert.Contains(900500, WantedPosters.Due(late + (long)WantedPosters.Grace.TotalMilliseconds).Select(c => c.Monster));
+            }
+            finally { ServerSettings.UseForTests(previous); }
+        }
+
         /// <summary>A map emptied or put back lets its criminal go.</summary>
         [Fact]
         public void A_map_cleared_lets_its_criminal_go()

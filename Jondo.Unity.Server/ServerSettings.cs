@@ -118,6 +118,21 @@ namespace Jondo.Unity.Server
         public int HeadHuntRestMinutes { get; set; } = 30;
 
         /// <summary>
+        /// The chance, in percent, that a wanted criminal free to come back does come back; 100, the
+        /// game's, keeps every one of them about. One that does not tries again <see cref="WantedRetryMinutes"/> later.
+        /// </summary>
+        public int WantedChancePercent { get; set; } = 100;
+
+        /// <summary>How long a criminal that did not come back waits for its next chance, in minutes.</summary>
+        public int WantedRetryMinutes { get; set; } = 60;
+
+        /// <summary>
+        /// A criminal beaten by anybody stays away the same hours as one taken by whoever had his
+        /// quest; off, the game's, one nobody took comes back two minutes later.
+        /// </summary>
+        public bool WantedBeatenStaysAway { get; set; }
+
+        /// <summary>
         /// The hero mode (<see cref="Managers.Heroes"/>): the other characters of one's account
         /// connected beside one's own, fighting at one's side and played by hand in their turns.
         /// </summary>

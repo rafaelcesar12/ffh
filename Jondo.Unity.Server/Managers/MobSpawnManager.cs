@@ -1846,7 +1846,7 @@ namespace Jondo.Unity.Server.Managers
             {
                 if (_mapMobs.TryGetValue(mapId, out var mobs))
                 {
-                    ReleaseRareMonsters(mapId, mobs, mobId);
+                    ReleaseRareMonsters(mapId, mobs, mobId, beaten: true);
                     mobs.RemoveAll(m => m.MobId == mobId);
                 }
             }
@@ -1865,7 +1865,7 @@ namespace Jondo.Unity.Server.Managers
         /// <see cref="WantedMonsters.MayComeBack"/>), and its criminal, who comes back in another
         /// group (<see cref="PlaceCriminals"/>).
         /// </summary>
-        private static void ReleaseRareMonsters(long mapId, List<MobGroup> mobs, long mobId)
+        private static void ReleaseRareMonsters(long mapId, List<MobGroup> mobs, long mobId, bool beaten = false)
         {
             var group = mobs.Find(m => m.MobId == mobId);
             if (group == null) return;
@@ -1873,7 +1873,7 @@ namespace Jondo.Unity.Server.Managers
             Archimonsters.Release(mapId, members);
             WantedMonsters.Release(mapId, members);
             UniqueMonsters.Released(mapId, mobId);
-            WantedPosters.Released(mapId, mobId, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            WantedPosters.Released(mapId, mobId, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), beaten);
         }
 
         /// <summary>When the criminals may next be looked at: GetMobsForMap runs on every map load.</summary>
@@ -1919,6 +1919,7 @@ namespace Jondo.Unity.Server.Managers
             foreach (var criminal in due)
             {
                 if (!_monsters.TryGetValue(criminal.Monster, out var data) || data.Grades.Count == 0) continue;
+                if (!WantedPosters.ComesBack(criminal.Monster, nowMs, _rand)) continue;
                 var candidates = new List<(long Map, MobGroup Group)>();
                 foreach (int zone in criminal.Subareas)
                 {

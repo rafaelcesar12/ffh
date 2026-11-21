@@ -217,7 +217,7 @@ namespace Jondo.Unity.Server.Managers
         /// The group he stood in has gone -- beaten, removed --: he stands nowhere, and comes back once
         /// <see cref="Grace"/> is over, unless somebody took him meanwhile (<see cref="Captured"/>).
         /// </summary>
-        public static void Released(long map, long group, long nowMs)
+        public static void Released(long map, long group, long nowMs, bool beaten = false)
         {
             lock (_gate)
             {
@@ -225,7 +225,9 @@ namespace Jondo.Unity.Server.Managers
                 {
                     _placed.Remove(pair.Key);
                     _lastStood[pair.Key] = pair.Value;
-                    long back = nowMs + (long)Grace.TotalMilliseconds;
+                    // FFH: beaten is beaten, whoever won -- away the hours a capture keeps him.
+                    var wait = beaten && ServerSettings.Current.WantedBeatenStaysAway ? AbsenceFor(pair.Key, _dice) : Grace;
+                    long back = nowMs + (long)wait.TotalMilliseconds;
                     _awayUntil[pair.Key] = _awayUntil.TryGetValue(pair.Key, out long until) ? Math.Max(until, back) : back;
                 }
             }
@@ -253,18 +255,38 @@ namespace Jondo.Unity.Server.Managers
                              || (_lastStood.TryGetValue(monster, out var was) && was == (map, group));
                 if (!there) return null;
 
-                var away = Absence + TimeSpan.FromMinutes(dice.Next(-(int)AbsenceSpread.TotalMinutes,
-                                                                     (int)AbsenceSpread.TotalMinutes + 1));
-
-                // Today's Almanax may bring him back sooner: «La velocidad de aparición de los
-                // monstruos de Se busca aumenta un 200%» (day 51, type 3, by race).
-                int faster = Almanax.BonusPercent(Almanax.BonusType.WantedSpawn,
-                    Almanax.Where.Anywhere with { Monsters = new[] { monster }, Races = new[] { Almanax.RaceOf(monster) } });
-                if (faster > 0) away = TimeSpan.FromTicks(away.Ticks * 100 / (100 + faster));
+                var away = AbsenceFor(monster, dice);
                 long until = nowMs + (long)away.TotalMilliseconds;
                 _awayUntil[monster] = _awayUntil.TryGetValue(monster, out long already) ? Math.Max(already, until) : until;
                 return away;
             }
+        }
+
+        /// <summary>Three hours give or take a quarter, sooner on the Almanax's day for his race.</summary>
+        private static TimeSpan AbsenceFor(int monster, Random dice)
+        {
+            var away = Absence + TimeSpan.FromMinutes(dice.Next(-(int)AbsenceSpread.TotalMinutes,
+                                                                 (int)AbsenceSpread.TotalMinutes + 1));
+            // Today's Almanax may bring him back sooner: «La velocidad de aparición de los
+            // monstruos de Se busca aumenta un 200%» (day 51, type 3, by race).
+            int faster = Almanax.BonusPercent(Almanax.BonusType.WantedSpawn,
+                Almanax.Where.Anywhere with { Monsters = new[] { monster }, Races = new[] { Almanax.RaceOf(monster) } });
+            return faster > 0 ? TimeSpan.FromTicks(away.Ticks * 100 / (100 + faster)) : away;
+        }
+
+        private static readonly Random _dice = new();
+
+        /// <summary>
+        /// Whether a criminal free to come back does, by <see cref="ServerSettings.WantedChancePercent"/>;
+        /// one that does not is put off <see cref="ServerSettings.WantedRetryMinutes"/>.
+        /// </summary>
+        public static bool ComesBack(int monster, long nowMs, Random dice)
+        {
+            var settings = ServerSettings.Current;
+            if (settings.WantedChancePercent >= 100 || dice.Next(100) < settings.WantedChancePercent) return true;
+            lock (_gate)
+                _awayUntil[monster] = nowMs + (long)TimeSpan.FromMinutes(Math.Max(1, settings.WantedRetryMinutes)).TotalMilliseconds;
+            return false;
         }
 
         /// <summary>
