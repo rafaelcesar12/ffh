@@ -7,6 +7,7 @@ using Jondo.Unity.Server.Handlers;
 using Jondo.Unity.Server.Managers;
 using Jondo.Unity.Server.Network;
 using Jondo.Unity.Protocol.Game;
+using Jondo.Unity.Protocol.Game.Wire;
 using Jondo.Unity.Tests.Economy;
 using Microsoft.Data.Sqlite;
 using Jondo.Unity.Server.Database.Migrations;
@@ -41,17 +42,14 @@ namespace Jondo.Unity.Tests.Sessions
             void CheckLook(byte[] look) => AssertLook(look, body, scale, headSkin);
             // Unique, and within the client's naming rule (CharacterNames), which the server checks.
             string name = "Palette-" + string.Concat(Guid.NewGuid().ToString("N")[..11].Select(c => (char)('a' + Convert.ToInt32(c.ToString(), 16))));
-            var creation = Pb.New().Str(1, name).Var(2, head)
-                // The bytes are from the capture, independent of the server's colour writer.
-                .Bytes(3, Convert.FromHexString("EF969E068680A0078780E0078680CC06C7ACE5038680B406"))
-                .Msg(4, Pb.New().Var(1, 17).Var(2, 2))
-                .Var(5, 42).VarIfNotZero(6, sex).Var(7, breed);
+            var creation = new CharacterCreationRequest(new(name, head, Rgb.Select(color => (int)color).ToArray(),
+                null, 42, sex == 1 ? Gender.Female : Gender.Male, breed));
             try
             {
                 pipe.Session.BindAccount(account, 290);
-                await CharacterCreationHandler.CreateAsync(pipe.Session,
-                    ConnectionProtocol.Push(Op.Kvz, Pb.New().Msg(1, creation).Build()));
-                Assert.Empty(await pipe.Next(Op.Kvb));
+                await CharacterCreationHandler.CreateAsync(pipe.Session, creation);
+                var reply = new GameCodec().Decode(await Jondo.Protocol.NetworkMessage.ReadFrameAsync(pipe.FromServer));
+                Assert.Equal(new CharacterCreationResultEvent(NameCompliance.NameOk, CharacterCreationResult.CreateOk), reply.Content);
                 for (int i = 0; i < 3; i++) await pipe.Next(Op.Kqp);
                 byte[] list = await pipe.Next(Op.Kvi);
                 await pipe.Next(Op.Jtg);
@@ -80,16 +78,22 @@ namespace Jondo.Unity.Tests.Sessions
                 // current connection date is sent; no fresh timestamp is invented.
                 Assert.Empty(selectedLook.LastDisconnectionDate);
                 Assert.Equal(character.LastConnection, selectedLook.LastConnectionDate);
-                CheckLook(At(ConnectionProtocol.BuildPlayerActorBlock(character, 245, 1, account), 2, 3));
+                var mapLook = MapActorMessages.Player(character, 245, 1, account).ActorInformation!.Look;
+                Assert.Equal(Indexed.Select(value => (int)value), mapLook.Colors);
+                Assert.Equal(new[] { (int)body, (int)headSkin }, mapLook.Skins);
+                Assert.Equal(new[] { (int)scale }, mapLook.Scales);
                 CheckLook(At(ConnectionProtocol.BuildLookChanged(character), 2));
 
                 byte[] appearance = At(ConnectionProtocol.BuildAppearanceState(character, "draft"), 3);
                 Assert.Equal(Rgb, Packed(At(appearance, 1, 2)));
                 CheckLook(At(appearance, 12));
-                foreach (var outfit in ProtoMessage.Parse(ConnectionProtocol.BuildOutfits(character)).Fields)
+                foreach (var outfit in WardrobeMessages.Live.Snapshot(SessionContext.Current, character, Outfits.Of(character.Id)).Outfits)
                 {
-                    Assert.Equal(Rgb, Packed(At(outfit.BytesValue, 1, 2)));
-                    CheckLook(At(outfit.BytesValue, 12));
+                    Assert.Equal(Rgb, outfit.Colors!.Colors.Select(value => (long)value));
+                    Assert.Equal(head, outfit.HeadId);
+                    Assert.Equal(Indexed.Select(value => (int)value), outfit.EntityLook!.Colors);
+                    Assert.Equal(new[] { (int)body, (int)headSkin }, outfit.EntityLook.Skins);
+                    Assert.Equal(new[] { (int)scale }, outfit.EntityLook.Scales);
                 }
                 Assert.Contains("2=#E80006", CharacterLookBuilder.Drawable(character));
             }

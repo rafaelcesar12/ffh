@@ -80,6 +80,7 @@ namespace Jondo.Unity.Server.Network
         // connection identity across character changes, independently of the registry GUID.
         internal long HaapiSessionUid { get; } = Interlocked.Increment(ref _nextHaapiSessionUid);
         public NetworkStream? Stream { get; }
+        internal bool HasTransport => Stream != null || _sendPacket != null;
 
         public SessionState State { get; } = new SessionState();
         /// <summary>Captures this owner's current human combat totals, independent of the ambient session.</summary>
@@ -121,7 +122,9 @@ namespace Jondo.Unity.Server.Network
         /// </summary>
         public Task SendAsync(byte[] packet)
         {
-            if (_sendPacket != null) return _sendPacket(packet);
+            // The same filter as the frame writer's, for the sessions that do not write to a stream.
+            if (_sendPacket != null)
+                return Jondo.Unity.Server.Managers.InvisibleItems.Hides(packet) ? Task.CompletedTask : _sendPacket(packet);
             if (Stream != null) return Jondo.Protocol.NetworkMessage.WriteFrameAsync(Stream, packet);
             Jondo.Protocol.NetworkMessage.FrameTap?.Invoke(packet);
             return Task.CompletedTask;

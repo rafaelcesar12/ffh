@@ -49,6 +49,18 @@ namespace Jondo.Unity.Server.Handlers
         private const int CostPerStep = 10;
 
         /// <summary>
+        /// Frigost Island (area 48) is closed below level 50: Captain Ardier refuses the crossing
+        /// (dialogues.json, «PL>49»), and on a server that offers every zaap without discovering it
+        /// (ServerSettings.RequireZaapDiscovery off) its zaaps would let anyone in. They are neither
+        /// offered nor travelled to below that level.
+        /// </summary>
+        internal const int FrigostArea = 48;
+        internal const int FrigostLevel = 50;
+
+        internal static bool ClosedToLevel(int subAreaId, int level)
+            => level < FrigostLevel && Interactives.AreaOfSubArea(subAreaId) == FrigostArea;
+
+        /// <summary>
         /// hip: the zaap window's «Guardar», the position saved at the zaap whose window is open,
         /// «Posición guardada.» and the list again with it as the saved one (SavedPositions).
         /// </summary>
@@ -86,6 +98,9 @@ namespace Jondo.Unity.Server.Handlers
             // while a normal zaap's carries forty-eight --. It makes sense: a vestige is not a zaap,
             // it is where an anomaly surfaces.
             bool vestige = Interactives.IsVestige(here, zaap);
+            var session = SessionContext.Current;
+            if (!vestige && ZaapDiscoveries.Discover(session.CharacterId, here))
+                await EntryEnvironmentMessages.Live.SendKnownAsync(session);
             var destinations = vestige ? AnomalyDestinations(here) : Destinations(here);
 
             // f2 is the character's saved zaap, the same wherever the window is opened (eight captures).
@@ -193,9 +208,10 @@ namespace Jondo.Unity.Server.Handlers
             {
                 target = chosen;
                 var waypoint = Interactives.WaypointOf(target);
-                if (waypoint == null)
+                if (waypoint is not { Activated: true } ||
+                    (target != from && !ZaapDiscoveries.KnownMaps(SessionContext.State.CharacterId).Contains(target)))
                 {
-                    Console.WriteLine($"[Zaap] The client asks to travel to {target}, which has no zaap.");
+                    Console.WriteLine($"[Zaap] Destination {target} is unavailable to {SessionContext.State.CharacterId}.");
                     return;
                 }
                 cost = CostBetween(from, target);
@@ -208,6 +224,13 @@ namespace Jondo.Unity.Server.Handlers
                 return;
             }
 
+            if (ClosedToLevel(DatabaseManager.SubAreaOfMap(target), SessionContext.State.CharacterLevel))
+            {
+                Console.WriteLine($"[Zaap] Map {target} is in Frigost and {SessionContext.State.CharacterName} " +
+                                  $"is below level {FrigostLevel}. No travelling.");
+                return;
+            }
+
             if (Jondo.Unity.Server.Network.SessionContext.State.Kamas < cost)
             {
                 Console.WriteLine($"[Zaap] Not enough kamas to go to {target}: it costs {cost} and there are " +
@@ -216,6 +239,7 @@ namespace Jondo.Unity.Server.Handlers
             }
 
             long mapaQueDeja = Jondo.Unity.Server.Network.SessionContext.State.MapId;
+            var previousMap = SessionContext.Current.Map;
             Jondo.Unity.Server.Network.SessionContext.State.Kamas -= cost;
             Jondo.Unity.Server.Network.SessionContext.State.MapId = target;
 
@@ -239,7 +263,7 @@ namespace Jondo.Unity.Server.Handlers
             await PartyFollowHandler.LeaderTravelledAsync(SessionContext.Current);
 
             // And let both maps find out: the zaap told neither.
-            await SessionRegistry.AnunciarMudanzaAsync(SessionContext.Current, mapaQueDeja);
+            await SessionRegistry.AnunciarMudanzaAsync(SessionContext.Current, previousMap);
 
             // The same order as the capture: first the character is taken off the map he leaves,
             // then he is told to load the new one, and the kamas at the end.
@@ -264,22 +288,20 @@ namespace Jondo.Unity.Server.Handlers
         }
 
         /// <summary>
-        /// The destinations he is offered. All the active zaaps: in this emulator the character has
-        /// discovered all of them.
-        ///
-        /// With one condition: that one can come back from the destination. A map whose zaap we do not know
-        /// the location of is a place there is no way out of, and that is worse than not offering it. The
-        /// place one is already at is offered all the same, because in the real capture one's own map
-        /// appears in the list with cost zero.
+        /// Active, discovered zaaps that have a usable departure element.
+        /// The current zaap is included at zero cost.
         /// </summary>
         private static List<ConnectionProtocol.ZaapDestination> Destinations(long from)
         {
             var salida = new List<ConnectionProtocol.ZaapDestination>();
+            var known = ZaapDiscoveries.KnownMaps(SessionContext.State.CharacterId).ToHashSet();
+            int level = SessionContext.State.CharacterLevel;
             foreach (var waypoint in Interactives.Waypoints)
             {
                 if (!waypoint.Activated) continue;
                 if (MapManager.GetMapInfo(waypoint.MapId) == null) continue;
-                if (waypoint.MapId != from && !Interactives.CanLeaveFrom(waypoint.MapId)) continue;
+                if (waypoint.MapId != from && !known.Contains(waypoint.MapId)) continue;
+                if (waypoint.MapId != from && ClosedToLevel(waypoint.SubAreaId, level)) continue;
 
                 salida.Add(new ConnectionProtocol.ZaapDestination(
                     waypoint.MapId,

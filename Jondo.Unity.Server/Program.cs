@@ -131,6 +131,7 @@ namespace Jondo.Unity.Server
             // 0. Resolved data paths. Everything the emulator needs now lives inside its own
             //    folder; the root is derived from the assembly location, not hardcoded.
             Paths.LogResolvedPaths();
+            Console.WriteLine($"[Protocol] Game profile: {Jondo.Unity.Protocol.Game.Wire.GameCodec.JondoVersion}");
             // Freeze this run's settings before the desktop can save edits for the next run.
             _ = ServerSettings.Current;
 
@@ -172,10 +173,13 @@ namespace Jondo.Unity.Server
             Managers.DungeonPlacements.Initialize();
             // The jail's sentences still running, and the clock that ends them.
             Managers.Jail.Initialize();
+            // The bans of the staff's ".ban", kept across restarts (the mutes are not).
+            Managers.Sanctions.Initialize();
             Managers.Dreams.Initialize();
             Managers.Merkasako.Initialize();
             Managers.Zaapis.Initialize();
             Managers.Transports.Initialize();
+            Managers.Companions.Initialize();
             Managers.Bins.Initialize();
             Managers.Anomalies.Initialize();
             Managers.Houses.Initialize();
@@ -219,6 +223,7 @@ namespace Jondo.Unity.Server
             Managers.Readables.Load();
             Managers.DungeonExitRooms.Load();
             Managers.FightWinAlterations.Load();
+            Managers.IdolRules.Load();
             // After the quests: 259 achievements are earned by finishing one, and the catalogue is indexed
             // by quest when loaded.
             Managers.Achievements.Load();
@@ -327,9 +332,20 @@ namespace Jondo.Unity.Server
                 },
                 null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
 
+            using var monsterWalks = new System.Threading.Timer(
+                _ =>
+                {
+                    if (Interlocked.Exchange(ref _mobRoamingTicking, 1) != 0) return;
+                    try { Managers.MobSpawnManager.RoamAsync().GetAwaiter().GetResult(); }
+                    catch (Exception ex) { Console.WriteLine($"[Mob movement] {ex.Message}"); }
+                    finally { Interlocked.Exchange(ref _mobRoamingTicking, 0); }
+                },
+                null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+
             _ready = true;
 
             await _shutdown.Task;
+            await monsterWalks.DisposeAsync();
             await launchCleanup.DisposeAsync();
             await matchmaking.DisposeAsync();
             await conquests.DisposeAsync();
@@ -376,6 +392,7 @@ namespace Jondo.Unity.Server
         private static int _koliseoTicking;
         private static int _conquestTicking;
         private static int _headHuntsTicking;
+        private static int _mobRoamingTicking;
 
         /// <summary>The argument a restarted run gets: the process id of the run it replaces.</summary>
         private const string RestartAfter = "--restart-after";

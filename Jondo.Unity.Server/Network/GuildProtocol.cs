@@ -9,8 +9,8 @@ namespace Jondo.Unity.Server.Network
     ///
     /// What goes byte by byte against the capture -the guild one belongs to (jgw)- has its test.
     /// Guild ranks use GuildRankMessages; membership/headers use GuildStateMessages. The member
-    /// list (jgu) is built with the fields that are understood and a few constants that are
-    /// copied from the founder's capture without knowing what they mean; they are marked where appropriate.
+    /// list (jgu) uses GuildRosterMessages. Incremental member/card serializers below still
+    /// have live consumers and retain their separate historical construction policy.
     /// </summary>
     public static class GuildProtocol
     {
@@ -116,19 +116,6 @@ namespace Jondo.Unity.Server.Network
         /// <summary>The guild hall's look (jqf): { f1 the theme }.</summary>
         public static byte[] BuildHallTheme(int theme) => Pb.New().Var(1, theme).Build();
 
-        /// <summary>
-        /// A hall room's jss f4 (jry): the guild's own hall, f1 { f1 { f1 its look, f2 the looks it may
-        /// take } }, which fft's map frame raises as PlayerGuildHallEntered; or anybody else's, f3 { f1
-        /// whether he may choose it }. Measured: "0a070a050801120101" once Amakna's was chosen at
-        /// level 1, "1a020801" before, by the leader.
-        /// </summary>
-        public static byte[] BuildHallVisit(bool own, int theme, IEnumerable<int> themes, bool mayChoose)
-        {
-            if (own)
-                return Pb.New().Msg(1, Pb.New().Msg(1, Pb.New().Var(1, theme).Packed(2, themes.Select(t => (long)t)))).Build();
-            return Pb.New().Msg(3, Pb.New().VarIfNotZero(1, mayChoose ? 1 : 0)).Build();
-        }
-
         /// <summary>The logbook's bulletin (jjf): { f1 the notice } -- fft.behl, shown by GuildLogBook.</summary>
         public static byte[] BuildBulletin(GuildStore.Notice notice) => Pb.New().Msg(1, Notice(notice)).Build();
 
@@ -147,59 +134,25 @@ namespace Jondo.Unity.Server.Network
 
         /// <summary>
         /// The guild as seen from a map actor (jhe): the guild block, the position, the
-        /// member's experience and a constant f4 (1791 in all the «Jondo» captures, with no
-        /// reconstructed meaning). It is what the client draws on hovering over.
+        /// member's experience and guild skin id in f4. The historical map-actor policy
+        /// supplies skin 1791; silent membership sends retain their separate zero policy.
         /// </summary>
-        public const int ActorGuildTrailer = 1791;
+        public const int ActorGuildSkinId = 1791;
 
         public static byte[] BuildActorGuild(GuildStore.Guild guild, int rank, long memberExperience)
             => Pb.New()
                 .Msg(1, GuildBlock(guild))
                 .Var(2, rank)
                 .VarIfNotZero(3, memberExperience)
-                .Var(4, ActorGuildTrailer)
+                .Var(4, ActorGuildSkinId)
                 .Build();
 
-        /// <summary>
-        /// A member for the window's list (jgu).
-        /// </summary>
-        /// <remarks>
-        /// Measured over the seven members of two guilds in the captures: f3 the level (with the
-        /// omegas inside: 354, 352, 369), f5.f2 the position, f5.f4 when he joined, f5.f6 THE CLASS -12
-        /// the pandawa, 10 the sadida, 11 the sacrier; by copying the founder's 11 every member
-        /// came out drawn as a sacrier-, f5.f7.f1 the achievement points -8094 the founder, 2466,
-        /// 732 and 55 the rest, which is what the «Logros» column shows-, f5.f8 whether he is connected and
-        /// f5.f10 the account. f5.f3 (1 for the founder, absent for the rest) and f5.f7.f3 (3 for
-        /// the founder, 2 for the rest) are still without meaning and go as for the founder.
-        /// </remarks>
-        public static byte[] BuildMember(GuildStore.Member member, string name, int level, long accountId,
-                                         int breed, int achievementPoints, int contributed = 0, bool online = true)
-            => BuildMembers(new[] { new MemberRow(member, name, level, accountId, breed, achievementPoints, contributed, online) });
-
-        /// <summary>One member's row of the list, with what the entry needs besides the membership.</summary>
+        /// <summary>Shared inputs for the remaining legacy card/update serializers.</summary>
         public readonly record struct MemberRow(GuildStore.Member Member, string Name, int Level, long AccountId,
                                                 int Breed, int AchievementPoints, int Contributed, bool Online);
 
         /// <summary>
-        /// The member list (jgu): EVERY member in one message, an f1 each.
-        /// </summary>
-        /// <remarks>
-        /// The client takes a jgu as the whole list and replaces the one it had (fft::begz sets
-        /// the guild service's list from it), so a jgu per member left only the last one. The
-        /// captures agree: sixteen members in one jgu ("salir de mi gremio", "recibir
-        /// invitacion"), two in one ("muchas acciones"), never one each.
-        /// </remarks>
-        public static byte[] BuildMembers(IEnumerable<MemberRow> rows)
-        {
-            var list = Pb.New();
-            foreach (var r in rows)
-                list.Msg(1, MemberEntry(r.Member, r.Name, r.Level, r.AccountId, r.Breed, r.AchievementPoints,
-                                        r.Contributed, r.Online));
-            return list.Build();
-        }
-
-        /// <summary>
-        /// A member brought up to date (jgz): the same entry as the jgu, in f2. It is what
+        /// A member brought up to date (jgz): the historical entry in f2. It is what
         /// the server answers to the note (jjj) and what it sends after a contribution.
         /// </summary>
         public static byte[] BuildMemberUpdated(GuildStore.Member member, string name, int level, long accountId,
@@ -207,7 +160,8 @@ namespace Jondo.Unity.Server.Network
             => Pb.New().Msg(2, MemberEntry(member, name, level, accountId, breed, achievementPoints, contributed, online)).Build();
 
         /// <summary>
-        /// A member's entry, the one that goes inside the jgu and the jgz.
+        /// Historical incremental member entry. Direct jgu lists use GuildRosterMessages and
+        /// its reviewed account/enrollment/gender/state assignments and omission policy.
         /// </summary>
         /// <remarks>
         /// From the jgz of «hola» and the jgu after contributing: f7.f2 are the guild coins,
@@ -349,12 +303,6 @@ namespace Jondo.Unity.Server.Network
             }
             return jie.VarIfNotZero(2, foundedSeconds).Msg(3, DirectoryGuild(entry)).Build();
         }
-
-        /// <summary>
-        /// The contributions left this week (jla): 5, 4, 3 in the contributing capture,
-        /// one less for each one, and empty in a guild that has none.
-        /// </summary>
-        public static byte[] BuildContributionsLeft(int left) => Pb.New().VarIfNotZero(1, left).Build();
 
         /// <summary>
         /// The guild's week (jfl): f1 its tier, f2 its activity points, f3 the member's token cap,

@@ -29,7 +29,8 @@ people on it (`ConnectionProtocol.BuildMapActors`), a hero connecting is drawn (
 taken off (kmu). He walks after his master -- the master's own walk, the first hero stopping one step
 short of its end, the next two -- and goes with him from one map to the next
 (`SessionRegistry.AnunciarMudanzaAsync`). In a fight he is off the map, and back beside his master
-when it is over.
+when it is over. A map he reaches beside his master is his too: the zone explored for his
+achievements, and its zaap discovered (`ZaapDiscoveries.Discover`), with no need to play him there.
 
 For his guild and his alliance he is in the world (`SessionRegistry.IsOnline`): their member lists
 show him connected, and they are told as he connects or is let go. His friends see his account
@@ -120,11 +121,37 @@ as the list is asked for, and the mod asks for it all along, so they are there a
 
 While a hero is connected, a **group panel** stands at the right of the screen: each member's
 portrait and life (his fighter's in a fight, his resting life outside one), a crown for the master,
-and two switches -- **AUTO**, a hero's turns passed by the server as they come, and **LOOT**, the
-group's items all to that one (each keeps his experience and kamas; `FightHandler.GatherHeroLoot`).
+and switches for passing a hero's turns automatically, sharing quest progress, and choosing who
+receives the group's loot. Everyone keeps their own experience and kamas.
 It folds with its «—» button; the Heroes icon beside it opens the window. Every switch says what it
 does under the pointer, in the game's language, and a portrait shows what a group's tooltip shows of
 a member: class, level, life, AP, MP, initiative, prospecting and wisdom.
+
+**Share quest progress** is the checklist button on each connected hero. It starts eligible
+quests and advances matching objectives when the active character talks to an NPC, uses a
+quest object, discovers a location, or wins a fight the hero joined. Each hero uses their
+own quest log, prerequisites and inventory, and receives their own quest rewards. Actions
+such as crafting and paid or teleporting replies still require playing the character.
+The switch starts **on** (Keka-Bron/JondoEmu#206: a forgotten switch left heroes behind unseen);
+turning it off for a hero stays with the character across hero swaps until the server restarts.
+
+When the master moves a quest and a hero who shares quests does not follow, the master is told at
+once, in a warning in his language: «Greensback n'a pas suivi ta quête : il lui manque 2 des objets
+demandés». Once a quest, not again at each step after. The reason is the first that applies:
+
+| Reason | When |
+| --- | --- |
+| Not on your map / in a fight | The hero was elsewhere, or a fight was on |
+| Not among the winners of that fight | A quest monster killed in a fight the hero did not win with him |
+| Items missing | The NPC or element takes items the hero lacks: which, and how many |
+| Step not shared | The reply takes items or kamas, or moves the master |
+| Conditions not met | The hero cannot start the quest: his level, a quest before it |
+| Quest not started / not on the same step | He was behind already |
+
+The hero's quests button then stays **red**; under the pointer it names each quest and why, with the
+client's own quest and item names. It turns back by itself once the hero has caught up -- by doing the
+step himself -- and is cleared when his sharing is turned off. `heroes/list` carries it per hero as
+`questLag: [{ quest, step, reason, item, count }]` (`Heroes.LagsOf`).
 
 Each connected hero's card in the window has three more glyphs -- a chest, three bars, a star --
 that open his bag, his characteristics and his spells, to look at (`POST /api/heroes/sheet { id }`):

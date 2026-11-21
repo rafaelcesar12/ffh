@@ -68,7 +68,7 @@ namespace Jondo.Unity.Server.Handlers
 
             await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
                 ConnectionProtocol.Push(Op.Iuj, AlterationProtocol.BuildSlotItemChanged(pet)));
-            await ItemUseHandler.SpendOneAsync(stream, uid);
+            await ItemUseHandler.SpendOneAsync(SessionContext.Current, uid);
             Console.WriteLine($"[Legendary pets] {SessionContext.State.CharacterName}'s pet {pet.Uid} " +
                               (what.GivesStatus ? "is legendary now." : $"has the power of spell {what.Spell} now."));
             return true;
@@ -279,13 +279,9 @@ namespace Jondo.Unity.Server.Handlers
             var character = DatabaseManager.GetCharacterById(Jondo.Unity.Server.Network.SessionContext.State.CharacterId);
             if (character != null)
             {
-                byte[] jsn = ConnectionProtocol.Push(Op.Jsn, ConnectionProtocol.BuildActorRefreshed(
-                    character, Jondo.Unity.Server.Network.SessionContext.State.CellId, Jondo.Unity.Server.Network.SessionContext.State.Orientation, accountId));
-                await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream, jsn);
                 // And whoever shares his map sees it too: they went on seeing him with the hat he
                 // had just taken off until they changed map themselves.
-                if (!SessionContext.State.IsInFight)
-                    await SessionRegistry.BroadcastToMapAsync(SessionContext.State.MapId, jsn, SessionContext.Current.Id);
+                await MapPresenceService.Live.RefreshAsync(SessionContext.Current, character, includeMap: !SessionContext.State.IsInFight);
 
                 await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
                     ConnectionProtocol.Push(Op.Lxc, ConnectionProtocol.BuildLookChanged(character)));

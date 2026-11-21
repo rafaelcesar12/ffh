@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Jondo.Unity.Protocol;
 using Jondo.Unity.Server.Managers;
 using Jondo.Unity.Server.Network;
+using Game = Jondo.Unity.Protocol.Game;
 
 namespace Jondo.Unity.Server.Handlers
 {
@@ -152,14 +153,11 @@ namespace Jondo.Unity.Server.Handlers
         /// iov with no NPC and a marketplace open: its "Vender" (5) or "Comprar" (6) button.
         /// </summary>
         /// <returns>False when it is some NPC's action and not this.</returns>
-        public static async Task<bool> ModeAsync(byte[] payload)
+        public static async Task<bool> ModeAsync(GameSession me, Game.NpcGenericActionRequest request)
         {
-            var me = SessionContext.Current;
             var window = WindowOf(me, out var house);
             if (window == null) return false;
-            byte[]? iov = ConnectionProtocol.ReadPayload(payload, Op.Iov);
-            if (iov == null) return false;
-            long action = VarOf(iov, 1), npc = VarOf(iov, 3);
+            int action = request.NpcActionId, npc = request.NpcId;
             if (npc != MarketplaceProtocol.NoNpc) return false;
             if (action != MarketplaceProtocol.SellAction && action != MarketplaceProtocol.BuyAction) return false;
 
@@ -268,16 +266,11 @@ namespace Jondo.Unity.Server.Handlers
         /// server's answer to every one of the captures' 140 ivp. The client replaces its whole
         /// table with it (elx), so an item missing from it reads «average price unavailable».
         /// </summary>
-        public static Task AveragePricesAsync(NetworkStream stream)
-            => Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream, ConnectionProtocol.Push("ivi", BuildAveragePrices()));
-
-        internal static byte[] BuildAveragePrices()
-        {
-            var ivi = Pb.New();
-            foreach (var (gid, price) in MarketplaceListings.AveragePrices())
-                ivi.Msg(2, Pb.New().Var(1, gid).Var(2, price));
-            return ivi.Build();
-        }
+        public static Task AveragePricesAsync(GameSession session)
+            => session.SendAsync(new Game.ObjectAveragePricesEvent(
+                MarketplaceListings.AveragePrices()
+                    .Select(row => new Game.ObjectAveragePrice(row.Gid, row.Price))
+                    .ToArray()));
 
         /// <summary>
         /// The «Cours du marché» window (MarketPrice) asks for an item's price history with itj
@@ -414,7 +407,7 @@ namespace Jondo.Unity.Server.Handlers
 
             var item = Equipment.ByUid(uid);
             if (item == null || item.Position != Equipment.Bag || price <= 0 || house.LotIndex(lot) < 0
-                || item.Quantity < lot)
+                || item.Quantity < lot || ItemBinding.BlocksTransfer(item.Effects, DateTimeOffset.UtcNow))
             {
                 Console.WriteLine($"[Marketplaces] {me.CharacterId} cannot put {uid} x{lot} on sale at {price}.");
                 return;
@@ -576,12 +569,12 @@ namespace Jondo.Unity.Server.Handlers
                 MarketplaceListings.HistoryOf(accountId, Clock() - MarketplaceListings.HistoryDepth));
 
         /// <summary>The las a character is given at world entry: null when there is nothing in it.</summary>
-        public static byte[]? SalesHistoryAtEntry(long characterId, long sessionAccountId)
+        public static Jondo.Unity.Protocol.Game.SalesHistoryEvent? SalesHistoryAtEntry(long characterId, long sessionAccountId)
         {
             long account = DatabaseManager.AccountIdOfCharacter(characterId);
             if (account <= 0) account = sessionAccountId;
             var lines = MarketplaceListings.HistoryOf(account, Clock() - MarketplaceListings.HistoryDepth);
-            return lines.Count == 0 ? null : MarketplaceProtocol.BuildSalesHistory(lines);
+            return lines.Count == 0 ? null : MarketplaceProtocol.SalesHistory(lines, ItemEffectMessages.FromCatalogue);
         }
 
         /// <summary>

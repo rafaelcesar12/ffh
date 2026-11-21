@@ -8,6 +8,7 @@ using Jondo.Unity.Server.Handlers;
 using Jondo.Unity.Server.Managers;
 using Jondo.Unity.Server.Network;
 using Jondo.Unity.Protocol;
+using Jondo.Unity.Protocol.Game;
 using Microsoft.Data.Sqlite;
 using Xunit;
 
@@ -75,36 +76,82 @@ namespace Jondo.Unity.Tests.World
             var founder = new DbCharacter { Id = 7001, Name = "Hero-Example", Level = 200, Breed = 11 };
             var loner = new DbCharacter { Id = 7002, Name = "Solo", Level = 200, Breed = 11 };
 
-            var withGuild = GuildOption(ConnectionProtocol.BuildPlayerActorBlock(founder, 341, 5, 60000001));
+            var withGuild = GuildOption(MapActorMessages.Player(founder, 341, 5, 60000001));
             Assert.NotNull(withGuild);
-            Assert.Equal(guild.Id, Field(withGuild!, 2));
-            Assert.Equal("Jondo", System.Text.Encoding.UTF8.GetString(
-                withGuild!.Fields.Single(f => f.FieldNumber == 3 && f.WireType == 2).BytesValue));
-            Assert.Equal(1, Field(withGuild!, 4));
+            Assert.Equal(guild.Id, withGuild!.Id);
+            Assert.Equal("Jondo", withGuild.Name);
+            Assert.Equal(1, withGuild.Level);
 
-            Assert.Null(GuildOption(ConnectionProtocol.BuildPlayerActorBlock(loner, 341, 5, 60000001)));
+            Assert.Null(GuildOption(MapActorMessages.Player(loner, 341, 5, 60000001)));
         }
 
-        /// <summary>The f5 { f4 { ... } } of the actor's humanoid body, or null if it does not carry it.</summary>
-        private static ProtoMessage? GuildOption(byte[] actor)
+        private static GuildInformation? GuildOption(ActorPositionInformation actor)
+            => MapActorAssertions.Human(actor).Options.Select(option => option.OptionCase)
+                .OfType<HumanOptionCaseGuildInformation>().SingleOrDefault()?.Value;
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async System.Threading.Tasks.Task Founding_spends_the_item_then_sends_typed_empty_houses_before_the_remaining_burst(bool fail)
         {
-            var root = ProtoMessage.Parse(actor);
-            var details = ProtoMessage.Parse(root.Fields.Single(f => f.FieldNumber == 2).BytesValue);
-            var kind = ProtoMessage.Parse(details.Fields.Single(f => f.FieldNumber == 1).BytesValue);
-            var humanoid = ProtoMessage.Parse(kind.Fields.Single(f => f.FieldNumber == 5).BytesValue);
-            var body = ProtoMessage.Parse(humanoid.Fields.Single(f => f.FieldNumber == 3).BytesValue);
-
-            foreach (var option in body.Fields.Where(f => f.FieldNumber == 5 && f.WireType == 2))
+            const long founder = 9_969_000_001;
+            var item = DatabaseManager.AddPieceToInventory(founder, GuildHandler.GuildalogemTemplate, "[]");
+            Assert.NotNull(item);
+            var codec = new FoundingCodec { Fail = fail };
+            await using var pipe = await Economy.ClientPipe.OpenAsync(8_969_000_001, founder, 91_969_001, codec: codec);
+            try
             {
-                var inner = ProtoMessage.Parse(option.BytesValue);
-                var guild = inner.Fields.FirstOrDefault(f => f.FieldNumber == 4 && f.WireType == 2);
-                if (guild != null) return ProtoMessage.Parse(guild.BytesValue);
+                using var context = SessionContext.Push(pipe.Session);
+                using var turn = await pipe.Session.EnterTurnAsync();
+                Equipment.Add(item.Uid, GuildHandler.GuildalogemTemplate, 1, Equipment.Bag, null);
+                var founding = GuildHandler.CreateFromCommandAsync(pipe.Session, "TypedHouseGuild");
+                if (fail) await Assert.ThrowsAsync<IOException>(() => founding);
+                else Assert.Null(await founding.WaitAsync(TimeSpan.FromSeconds(5)));
+                await pipe.Next(Op.Ium);
+                Assert.Null(Equipment.ByUid(item.Uid));
+                Assert.NotNull(GuildStore.GuildOf(founder));
+                Assert.Empty(Assert.IsType<GuildHousesEvent>(codec.Frames[0].Content).Houses);
+                Assert.Null(codec.Frames[0].Uid);
+                if (!fail)
+                {
+                    Assert.Equal(new byte[] { 0x73, 1 }, await Packet(pipe));
+                    await pipe.Next(Op.Jhq);
+                    Assert.Equal(new byte[] { 0x73, 2 }, await Packet(pipe));
+                    await pipe.Next(Op.Jgw);
+                    await pipe.Next(Op.Khi);
+                    Assert.Equal(new byte[] { 0x73, 3 }, await Packet(pipe));
+                    Assert.IsType<GuildMembersEvent>(codec.Frames[2].Content);
+                    Assert.Equal(new byte[] { 0x73, 4 }, await Packet(pipe));
+                }
+                else Assert.Single(codec.Frames);
+                Assert.Equal(0, pipe.Session.UnoCadaVez.CurrentCount);
+                Assert.False(pipe.FromServer.DataAvailable);
             }
-
-            return null;
+            finally
+            {
+                using var db = new SqliteConnection(DatabaseManager.WorldConnectionString);
+                db.Open();
+                using var clean = db.CreateCommand();
+                clean.CommandText = "DELETE FROM CharacterItems WHERE CharacterId = $founder;";
+                clean.Parameters.AddWithValue("$founder", founder);
+                clean.ExecuteNonQuery();
+            }
         }
 
-        private static long Field(ProtoMessage message, int number)
-            => message.Fields.Single(f => f.FieldNumber == number && f.WireType == 0).VarIntValue;
+        private static async System.Threading.Tasks.Task<byte[]> Packet(Economy.ClientPipe pipe)
+            => (await Jondo.Protocol.NetworkMessage.ReadFrameAsync(pipe.FromServer).WaitAsync(TimeSpan.FromSeconds(5)))!;
+
+        private sealed class FoundingCodec : IGameCodec
+        {
+            internal readonly System.Collections.Generic.List<GameFrame> Frames = [];
+            internal bool Fail;
+            public byte[] Encode(GameFrame frame)
+            {
+                Frames.Add(frame);
+                if (Fail && frame.Content is GuildHousesEvent) throw new IOException("house reset encoding failed");
+                return [0x73, checked((byte)Frames.Count)];
+            }
+            public GameFrame Decode(ReadOnlySpan<byte> packet) => throw new InvalidOperationException("Founding must not reparse packets.");
+        }
     }
 }

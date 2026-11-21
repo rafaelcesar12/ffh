@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using Jondo.Unity.Protocol;
+using Jondo.Unity.Protocol.Game.Wire;
+using Game = Jondo.Unity.Protocol.Game;
 using Jondo.Unity.Server;
 using Jondo.Unity.Server.Handlers;
 using Jondo.Unity.Server.Managers;
@@ -65,23 +68,6 @@ namespace Jondo.Unity.Tests.Combat
                          Hex(FightJoinProtocol.BuildJoinRefused(880000000007, FightJoinProtocol.RefusedPartyOnly)));
         }
 
-        /// <summary>Z frame 2632: the swords of a fight nobody locked, the monsters' side empty.</summary>
-        [Fact]
-        public void The_swords_are_the_fight_with_its_flags_and_its_two_sides()
-        {
-            const long watched = 52000000009;
-            var attackers = FightJoinProtocol.Team(0, watched, false,
-                new[] { FightJoinProtocol.PersonOnTeam(watched, 201, "Fighter1") });
-            var defenders = FightJoinProtocol.Team(1, -21200, true, Array.Empty<Pb>());
-
-            byte[] hpy = FightJoinProtocol.BuildFightShown(
-                FightJoinProtocol.FightOnMap(3331, FightRules.ContraMonstruos.TipoDelKam, 180, 182,
-                                             attackers, defenders));
-
-            Assert.Equal("0a490a04b401b60110041a23188990c4dbc10120012a180a160a0d08c901120846696768746572"
-                         + "31108990c4dbc1011a13100118b0dafeffffffffffff0120012a0030012a002a0030831a", Hex(hpy));
-        }
-
         /// <summary>F frames 139-141: the map's kae for each side, and the monsters' growing.</summary>
         [Fact]
         public void The_map_gets_each_side_as_a_kae()
@@ -118,16 +104,7 @@ namespace Jondo.Unity.Tests.Combat
         [Fact]
         public void The_small_ones_are_the_captures()
         {
-            Assert.Equal("1001", Hex(FightJoinProtocol.BuildFightCount(1)));          // F 138
-            Assert.Equal("1003", Hex(FightJoinProtocol.BuildFightCount(3)));          // S 54
-            Assert.Equal("", Hex(FightJoinProtocol.BuildFightCount(0)));              // Hipermago 4984
-            Assert.Equal("089022", Hex(FightJoinProtocol.BuildFightHidden(4368)));    // J 857
-            Assert.Equal("08841a", Hex(FightJoinProtocol.BuildFightHidden(3332)));    // Z 2650
-            Assert.Equal("08d703100120ffffffffffffffffff01",
-                         Hex(FightJoinProtocol.BuildTeamMemberRemoved(471, 1, -1)));  // B 100
             Assert.Equal("08f7ffffffffffffffff01", Hex(FightJoinProtocol.BuildFighterRemoved(-9)));  // B 140
-            Assert.Equal("10f7ffffffffffffffff01", Hex(FightJoinProtocol.BuildActorHidden(-9)));     // B 141
-            Assert.Equal("10dee3feffffffffffff01", Hex(FightJoinProtocol.BuildActorHidden(Group))); // F 132
             Assert.Empty(FightJoinProtocol.BuildLeftFight());                                        // S 37
         }
 
@@ -444,6 +421,64 @@ namespace Jondo.Unity.Tests.Combat
             session.EnterWorld();
             Assert.True(SessionRegistry.Register(session));
             return session;
+        }
+
+        [Fact]
+        public async Task Party_notice_is_typed_and_goes_to_waiting_members_but_not_to_the_fighter_or_followers()
+        {
+            const long leader = 8_101_000_001, follower = 8_101_000_002, stayer = 8_101_000_003, solo = 8_101_000_004;
+            const long map = 188744196;
+            var party = Parties.Create(leader);
+            Parties.Invite(party, follower, leader);
+            Parties.Accept(party, follower);
+            Parties.Invite(party, stayer, leader);
+            Parties.Accept(party, stayer);
+            var leadCodec = new PartyCodec();
+            var followerCodec = new PartyCodec();
+            var stayerCodec = new PartyCodec();
+            await using var lead = await Economy.ClientPipe.OpenAsync(leader, leader, map, codec: leadCodec);
+            await using var follow = await Economy.ClientPipe.OpenAsync(follower, follower, map, codec: followerCodec);
+            await using var stay = await Economy.ClientPipe.OpenAsync(stayer, stayer, map + 1, codec: stayerCodec);
+            try
+            {
+                FightHandler.SetAutoOptions(follower, join: true, ready: false);
+                follow.Session.State.PendingMovementMapId = map;
+                var fight = new FightInstance(9102, map, 191105032) { Reglas = FightRules.Desafio };
+                fight.SetPlacementCells(Enumerable.Range(300, 8), Enumerable.Range(180, 8));
+                var boss = Person(leader, "Leader", 200);
+                fight.AddPlayer(boss);
+                await FightHandler.PartyAfterEntryAsync(fight, Person(solo, "Solo", 200), tellTheParty: true);
+                await FightHandler.PartyAfterEntryAsync(fight, boss, tellTheParty: false);
+                Assert.Empty(stayerCodec.Frames);
+                await FightHandler.PartyAfterEntryAsync(fight, boss, tellTheParty: true);
+
+                var sent = Assert.Single(stayerCodec.Frames);
+                Assert.Null(sent.Uid);
+                var notice = Assert.IsType<Game.PartyMemberInFightEvent>(sent.Content);
+                Assert.Equal(leader, notice.MemberId);
+                Assert.Equal(9102, notice.FightId);
+                Assert.Equal("Leader", notice.MemberName);
+                Assert.Equal(Game.PartyMemberInFightCause.MemberChallenge, notice.Reason);
+                Assert.Equal(0, notice.TimeBeforeFightStart);
+                Assert.Equal(map, notice.StandardFightMap!.MapId);
+                Assert.Equal(notice, new GameCodec().Decode(await Jondo.Protocol.NetworkMessage.ReadFrameAsync(stay.FromServer)
+                    .WaitAsync(TimeSpan.FromSeconds(5))).Content);
+                Assert.Empty(leadCodec.Frames);
+                Assert.Empty(followerCodec.Frames);
+            }
+            finally
+            {
+                using (SessionContext.Push(follow.Session)) await FightHandler.AfterWalkAsync(follow.ToClient);
+                FightHandler.SetAutoOptions(follower, join: false, ready: false);
+                Parties.Dissolve(party);
+            }
+        }
+
+        private sealed class PartyCodec : Game.IGameCodec
+        {
+            public List<Game.GameFrame> Frames { get; } = [];
+            public byte[] Encode(Game.GameFrame frame) { Frames.Add(frame); return new GameCodec().Encode(frame); }
+            public Game.GameFrame Decode(ReadOnlySpan<byte> frame) => throw new InvalidOperationException("A send cannot decode.");
         }
 
         [Fact]

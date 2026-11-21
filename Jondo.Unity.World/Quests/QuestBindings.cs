@@ -184,6 +184,14 @@ namespace Jondo.Unity.World.Quests
         /// </remarks>
         public int TypeId { get; init; } = DefaultType;
 
+        /// <summary>
+        /// Every MAP of <see cref="Elements"/> needs one of its elements pressed, not just one element
+        /// of the list ("all"): the berry bushes of «Arrête-la si tu peux» are inspected one map after
+        /// the other, «Sigue la pista de las bayas» being a single objective. A map with two bushes
+        /// (the guide does not say which is meant) takes either.
+        /// </summary>
+        public bool AllMaps { get; init; }
+
         /// <summary>Items the click puts in the bag, if any: template and how many.</summary>
         public IReadOnlyList<(int Item, int Count)> Gives { get; init; }
             = Array.Empty<(int, int)>();
@@ -273,6 +281,13 @@ namespace Jondo.Unity.World.Quests
         /// steps onto the Pandasamblea's carpet, not on any step taken there.
         /// </summary>
         public IReadOnlyList<int> Cells { get; init; } = Array.Empty<int>();
+
+        /// <summary>
+        /// An objective and a number of minutes: the row only closes its objective once that
+        /// objective is done and that long has gone by, as a reply's «waited» does. In «Claro como el
+        /// aguardiente» the vat is opened an hour after the brew was put to ferment.
+        /// </summary>
+        public IReadOnlyList<int> Waited { get; init; } = Array.Empty<int>();
 
         /// <summary>The replies that close it, for <see cref="QuestBindingKind.Reply"/>.</summary>
         public IReadOnlyList<int> Replies { get; init; } = Array.Empty<int>();
@@ -427,7 +442,11 @@ namespace Jondo.Unity.World.Quests
 
         public void Add(QuestBinding binding)
         {
-            _byObjective[binding.ObjectiveId] = binding;
+            // An element that only hands over or only takes leaves its objective to the row that
+            // closes it: the four pillars of Furyha's rock each take a totem while «Coloca los
+            // tótems y sopla en la caracola» is the conch's to close. Reached by its element.
+            if (!binding.OnlyGives || !_byObjective.ContainsKey(binding.ObjectiveId))
+                _byObjective[binding.ObjectiveId] = binding;
 
             if (binding.Kind == QuestBindingKind.Enter && binding.Starts != 0 && binding.MapId != 0)
             {
@@ -662,6 +681,7 @@ namespace Jondo.Unity.World.Quests
                 ThenStarts = Int(row, "thenStarts"),
                 AfterObjectives = Ints(row, "afterObjectives"),
                 Cells = Ints(row, "cells"),
+                Waited = Ints(row, "waited"),
                 Replies = Ints(row, "replies"),
                 AnyOrder = row.TryGetProperty("anyOrder", out var anyOrder) && anyOrder.ValueKind == JsonValueKind.True,
                 ShowsNpc = Int(row, "showsNpc"),
@@ -671,6 +691,7 @@ namespace Jondo.Unity.World.Quests
                     : (0, 0),
                 OnlyGives = row.TryGetProperty("onlyGives", out var only) && only.ValueKind == JsonValueKind.True,
                 GivesEach = row.TryGetProperty("givesEach", out var each) && each.ValueKind == JsonValueKind.True,
+                AllMaps = row.TryGetProperty("all", out var allMaps) && allMaps.ValueKind == JsonValueKind.True,
                 OverridesMap = row.TryGetProperty("overridesMap", out var overrides)
                                && overrides.ValueKind == JsonValueKind.True,
                 ItemId = Int(row, "item"),

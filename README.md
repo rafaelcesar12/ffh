@@ -48,6 +48,16 @@ its spells must pass.
 
 - ✅ Legendary items, Dofus and prismaradites: all 74 answer every trigger the fights provoke
 
+### Classes checked beyond the harness
+
+Played by hand in the client, or audited spell by spell over several turns, initiative orders and
+chained sub-spells against what each spell's sheet says.
+
+| Class | How | Bugs found | Fixed | Still open |
+|---|---|:---:|:---:|---|
+| Foggernaut | Played by hand ([#100](https://github.com/Keka-Bron/JondoEmu/issues/100)) | 9 | 9 | — |
+| Xelor | Multi-turn audit of all 44 spells, then fixes, each checked in a fight but the server's own cast-in-line check (the client offers no other cell): **44/44 with no known bug** | 14 | 14 | — |
+
 ---
 
 ## 📑 Contents
@@ -87,7 +97,7 @@ its spells must pass.
 Before it starts, the installer asks three things, each with a default:
 
 * **Installation folder**: `C:\Program Files\JondoEmu` (Windows asks for permission once), or `~/.local/share/JondoEmu` on Linux.
-* **Dofus 3.6 client**: download it, from Ankama's official CDN or from the link below, or **I already have it** and choose your `Dofus.exe`.
+* **Dofus 3.6 client**: download it, from Ankama's official CDN or from the link below, or **I already have it** and choose your `Dofus.exe` (on Linux, `Dofus.x64` or `zaap-start.sh` too). On Linux the download offers the native **Linux** client or the **Windows** one through Wine.
 * **Server**: **On this computer**, or **On another machine (VPS, LAN…)** with its IP or name.
 
 Then it goes through each step with an animated progress bar, the step's name, its percentage and an estimated time:
@@ -134,7 +144,7 @@ The live game is on 3.6.11.12 and Ankama's launcher only provides the current ve
 
 It is the stock Ankama client. A 3.6.10.11 or 3.6.10.10 install from before the patch also works: keep the official launcher from updating it.
 
-What the mods do: **JondoFix** sends the client's sockets, Named Pipes and DNS queries to the emulator (ports `8888`, `5555`, `15881`, `6337`), accepts its self-signed certificate and injects the environment variables the client expects. It also adds the JondoBots card to the Koliseo window and the [admin window (F10)](#-admin-window-f10). **Cazacabezas** is the [head hunters' window](#-head-hunters) and **Heroes** the [hero mode](docs/heroes.md)'s window (Ctrl+Tab). The launcher puts the three into the client's `Mods/` each time it starts it, if the ones there differ.
+What the mods do: **JondoFix** sends the client's sockets, Named Pipes and DNS queries to the emulator (ports `8888`, `5555`, `15881`, `6337`), accepts its self-signed certificate and injects the environment variables the client expects. It also adds the JondoBots card to the Koliseo window, the loot and achievements to the monster group tooltip, and the [admin window (F10)](#-admin-window-f10). **Cazacabezas** is the [head hunters' window](#-head-hunters) and **Heroes** the [hero mode](docs/heroes.md)'s window (Ctrl+Tab). The launcher puts the three into the client's `Mods/` each time it starts it, if the ones there differ.
 
 MelonLoader drops a **`version.dll`** next to `Dofus.exe`: renaming it to `version.dll.disabled` turns the mods off to play the official game, and renaming it back turns them on. It writes a log per run under **`MelonLoader/Logs/`**: if the client starts but never reaches the emulator, look there first.
 
@@ -142,7 +152,7 @@ MelonLoader drops a **`version.dll`** next to `Dofus.exe`: renaming it to `versi
 
 ### Other ways to run it
 
-* **The full zip.** Each release also has `Jondo-Full-vX.Y.Z-win-x64.zip` and `Jondo-Full-vX.Y.Z-linux-x64.zip`: the same `JondoEmu` folder, unpacked by hand. Then install **MelonLoader 0.7.x** yourself from [its releases page](https://github.com/LavaGang/MelonLoader/releases), pointed at your `Dofus.exe` (it is published as a pre-release: tick *show pre-releases*, since **0.6.x does not work with this client**), and start **`Jondo Emulator Launcher.exe`**. The .NET 10 *Desktop Runtime* comes from [dotnet.microsoft.com](https://dotnet.microsoft.com/download/dotnet/10.0).
+* **The full zip.** Each release also has `JondoEmu-vX.Y.Z-win-x64.zip` and `JondoEmu-vX.Y.Z-linux-x64.zip`: the same `JondoEmu` folder, unpacked by hand. Then install **MelonLoader 0.7.x** yourself from [its releases page](https://github.com/LavaGang/MelonLoader/releases), pointed at your `Dofus.exe` (it is published as a pre-release: tick *show pre-releases*, since **0.6.x does not work with this client**), and start **`Jondo Emulator Launcher.exe`**. The .NET 10 *Desktop Runtime* comes from [dotnet.microsoft.com](https://dotnet.microsoft.com/download/dotnet/10.0).
 * **Docker:** the server also runs as a headless container: `docker compose up -d --build`. See [Jondo Server in Docker](docs/docker.md).
 * **Linux from source:** all four desktop tools have a native Linux workflow. See [Linux desktop setup](docs/linux-desktop.md) for building, configuring `Dofus.x64` without a mod loader, and desktop verification.
 
@@ -206,6 +216,7 @@ Built with **Avalonia**, the same toolkit as the Studio.
 - ✅ Updates from the repository's GitHub releases, required before playing: only the files that changed, or the whole release when most did
 - ✅ Server on this computer, started by the launcher, or on another machine (VPS, LAN); update repository and uninstall in *Settings*
 - ✅ HD and 4K scenery packs from Ankama's own CDN for the client's version: resumable and verified downloads
+- ✅ The Windows or Linux client from Ankama's CDN in *Settings*: downloads it whole, or checks the one in use and fetches only what is missing or damaged; on Windows the Linux client can be saved to take to another computer
 - ✅ Animated neon sign and falling stars
 - 🚧 OAuth sign-in
 
@@ -240,7 +251,7 @@ See [Server desktop and Linux deployment](docs/server-desktop.md) for requiremen
   | Dying costs no energy | A lost fight keeps the energy |
   | Random loot | See below |
   | Welcome message | A line in the chat on coming into the world |
-  | Simulate players | JondoBot-XXX bots of a random class, each over its own connection: they walk, fight monsters, gather, go to the Koliseo and accept every duel; how many are in varies under the maximum chosen. Three of every five go to the [cities' war](#%EF%B8%8F-cities-war) |
+  | Simulate players | Jondobot-Xx bots of a random class, each over its own connection: they walk, fight monsters, gather, go to the Koliseo and accept every duel; how many are in varies under the maximum chosen. Three of every five go to the [cities' war](#%EF%B8%8F-cities-war) |
   | Head hunters | The [Cazacabezas](#-head-hunters): hunt orders on players of the other city, with how long a hunt stays open and how long the prey rests between two |
 
   **Random loot.** Besides its own table, each monster beaten has a chance (10 % by default, raised
@@ -284,7 +295,7 @@ See [Server desktop and Linux deployment](docs/server-desktop.md) for requiremen
 - ✅ **62 zaaps** with the real cost and destination list
 <img width="2560" height="1502" alt="image" src="https://github.com/user-attachments/assets/1524d485-a845-4b62-a71c-b88de3bb7b54" />
 
-- ✅ Discovered zaaps remembered
+- ✅ Zaaps discovered on reaching their map, each character his own and his heroes with him, remembered (the server's settings file can open them all); Frigost's only from level 50
 - ✅ Saving your position at a zaap: a lost fight and the recall potion bring you back there
 - ✅ Zaapis of Bonta (24) and Brakmar (21)
 <img width="2560" height="1484" alt="image" src="https://github.com/user-attachments/assets/472e09f2-a49d-431e-8935-f60355457cdd" />
@@ -556,6 +567,7 @@ An alliance is made of characters, not guilds.
   city's winged players up to fifty levels above you — see [Cities' war](#%EF%B8%8F-cities-war)
 - ✅ **21,748 item templates** — spawning, equipping, bags, destruction, persistence
 - ✅ **929 item sets** with their bonuses
+- ✅ Quest progress flags stay hidden: no red crosses in the bag and no «you got» line for them
 - ✅ Boxes that open with a double click, by their own drop tables
 - ✅ Travel items: recall potion, city, class and quest potions, home potion, anklas
 - ✅ Food and potions that restore life and energy; the lower the energy, the less life they give back
@@ -681,7 +693,8 @@ An alliance is made of characters, not guilds.
 <img width="1700" height="930" alt="image" src="https://github.com/user-attachments/assets/02254e58-ec87-4839-82ac-f142ec5ef9cd" />
 
 - ✅ **38,744 monster groups**, respawned and kept populated, across **562 sub-areas**
-- ✅ No monsters indoors or on zaaps
+- ✅ No monsters in houses, shops or on zaaps; they stand in dungeons and in indoor hunting grounds (mines, sewers, mazes)
+- ✅ Monster groups stroll a few cells around their map while players are there; dungeon rooms' groups wait in place
 - 🟡 371 monsters have no spells in the client's own data: summoned objects, and six that roam (eggs, spirits)
 - ✅ Dialogue trees authored in `content/npcs/dialogues.json`
 <img width="1138" height="694" alt="image" src="https://github.com/user-attachments/assets/fc1182c3-a261-4bcd-9532-84a2ceda8dc8" />
@@ -708,16 +721,16 @@ played through.
 | Astrub | `██████████` **100%** | 51/51 |
 | Class Temple | `██████████` **100%** | 39/39 |
 | Kingdom of Amakna | `█████████░` **89%** | 34/38 |
+| World Quests | `██░░░░░░░░` **23%** | 33/145 |
 | Wanted Notices | `███░░░░░░░` **32%** | 26/82 |
-| World Quests | `██░░░░░░░░` **17%** | 25/145 |
 | Incarnam | `██████████` **100%** | 24/24 |
 | Wabbit Islands | `██████████` **100%** | 23/23 |
 | Vigilantes | `██████████` **100%** | 21/21 |
 | Cania | `███████░░░` **73%** | 19/26 |
 | Krosmoz | `██████████` **100%** | 18/18 |
+| Pandala Island | `███░░░░░░░` **27%** | 15/55 |
 | Otomai Island | `██████████` **100%** | 14/14 |
 | Bwork and Goblin Camps | `██████████` **100%** | 12/12 |
-| Pandala Island | `██░░░░░░░░` **22%** | 12/55 |
 | Moon Island | `██████████` **100%** | 10/10 |
 | Sufokia | `██░░░░░░░░` **18%** | 10/57 |
 | Kwismas | `█░░░░░░░░░` **13%** | 10/79 |
@@ -728,7 +741,7 @@ played through.
 | Brakmar | `██████████` **100%** | 5/5 |
 | Evil Forest | `██░░░░░░░░` **25%** | 1/4 |
 | Archipelago of Vulkania | `░░░░░░░░░░` **2%** | 1/60 |
-| **All quests** | **22.2%** | **439/1976** |
+| **All quests** | **22.8%** | **450/1976** |
 <!-- quest-status:end -->
 
 - ✅ Quests handed over by NPCs
@@ -859,14 +872,14 @@ One fight engine serves four kinds of fight:
 
 - ✅ Tactical arenas, placement phase and cell swapping
 - ✅ Swapping places with an ally during the placement: he is asked and accepts or refuses
-- ✅ Line of sight, turns with their timer, AP and MP; unused turn time partly kept
+- ✅ Line of sight, turns with their timer (40 s, 90 s in a dream, ten minutes in the guided tutorial's first fight), AP and MP; unused turn time partly kept
 - ✅ Movement, tackle and escape
 - ✅ Loot, victory and defeat screens, experience over **1,889 levels**, group respawn
 - ✅ End-of-fight statistics
 - ✅ Monsters and bosses run their own spells' mechanics — see **`docs/bosses.md`**
 - ✅ Monster AI that plans its turn
 - ✅ Weapon strikes, with their slash
-- ✅ Push and collision damage
+- ✅ Push and collision damage; along a diagonal a push goes half its cells, rounded up, as in the real game
 - ✅ Joining someone else's fight; party fights and their options
 - ✅ Cells marked for your side
 - ✅ The Forgelance's spells drawn as in the real game, and its Immortal Lance's states
@@ -874,6 +887,8 @@ One fight engine serves four kinds of fight:
   their lists; the fight's sides can close it to spectators
 - ✅ A won fight is shared among the players
 - ✅ Experience as the monster group's tooltip counts it: group bonus, levels, wisdom and the 5 % bonus
+- ✅ The monster group's tooltip also lists the achievements beating it can still earn (the boss's
+  challenges too) and what it drops, each item with its chance at your prospecting (JondoFix)
 - ✅ Limit on earned experience, from the characteristics panel
 - ✅ As in Dofus 3, mounts gain experience by breeding and guilds by their weekly activity
 - ✅ Losing costs energy and half the life, and sends you back to the zaap; no ghosts or phoenixes,
@@ -1009,6 +1024,8 @@ game; the list is generated by `tools/spell_checklist.py`.
 - ✅ **39 of the 43** general challenges watched live, *Hired Killer* among them (the other four are a breach's)
 - ✅ The bonus folded into experience, kamas and drops
 - ✅ Dungeon and anomaly challenges
+- ✅ Dungeon bosses' special challenges, judged live by the client's own rules (kill order, summons, pushes,
+  turns), with their achievements
 
 ---
 
@@ -1037,6 +1054,13 @@ the «[!] Sorts admins» set — and every attitude of the game.
 - Resizable, see-through while the pointer is elsewhere.
 - Wherever a character is chosen, the connected characters are in a drop-down.
 - The line at the bottom of each tab says what the server answered.
+
+### The right-click menu and the staff console
+
+- Right-click a character with a staff account for the client's own admin menu, in French, English or
+  Spanish: go to them, bring them, jail, mute, warn, kick, ban, and the game master's tools.
+- **F11** opens the client's staff console for moderators and above.
+- The server checks every command against the account's role, and staff only act on lower roles.
 
 ### Items
 

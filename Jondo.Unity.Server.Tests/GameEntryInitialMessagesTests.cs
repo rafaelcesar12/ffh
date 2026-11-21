@@ -38,10 +38,17 @@ public sealed class GameEntryInitialMessagesTests
         var previous = returning ? new DatabaseManager.LastVisit { When = DateTimeOffset.Parse("2026-11-11T09:08:00+02:00") } : null;
         var (packets, codec, sent) = await CaptureAsync(EmptyState(previous));
         var expected = DirectSequence.ToList();
+#if JONDO_PROTOCOL_3_8_1_2
+        expected.Remove(nameof(TagStoragesRefreshEvent));
+        expected.Remove(nameof(ConfigurationEvent));
+        const int baseCount = 31;
+#else
+        const int baseCount = 33;
+#endif
         if (returning) expected.Insert(expected.IndexOf(nameof(TextInformationEvent)) + 1, nameof(TextInformationEvent));
         Assert.Equal(expected, packets.Select(MessageName));
         Assert.Equal(packets.Count, sent);
-        Assert.Equal(returning ? 34 : 33, codec.Encodes);
+        Assert.Equal(returning ? baseCount + 1 : baseCount, codec.Encodes);
         Assert.Equal(0, codec.Decodes);
         Assert.DoesNotContain(nameof(QuestObjectiveUpdatedEvent), packets.Select(MessageName));
         Assert.DoesNotContain(nameof(TitleSelectionErrorEvent), packets.Select(MessageName));
@@ -118,7 +125,7 @@ public sealed class GameEntryInitialMessagesTests
             new ServerExperienceModifierEvent(105, 105, limit),
             new CharacterCapabilitiesEvent(0), new AlmanachCalendarDateEvent(81_001), new HavenBagPackListEvent([lastTheme, firstTheme]), rooms,
             new StorageKamasUpdateEvent(0), new ConfigurationEvent(null), new BonusesEvent([]), new CharacterLoadingCompleteEvent(),
-            new CharacterAppearanceCollectionEvent(null), new OutfitAuraChangedEvent(), new OrnamentSelectedEvent(), new OutfitLookUpdatedEvent("", null)];
+            new CharacterAppearanceCollectionEvent(null), new OutfitAuraChangedEvent(null), new OrnamentSelectedEvent(), new OutfitLookUpdatedEvent("", null)];
         for (int i = 0; i < packets.Count; i++) AssertEvent(expected[i], packets[i]);
     }
 
@@ -137,7 +144,7 @@ public sealed class GameEntryInitialMessagesTests
             new AlterationsEvent([]),
             new ServerExperienceModifierEvent(105, 105, 0), new CharacterCapabilitiesEvent(0), new AlmanachCalendarDateEvent(81_001), new HavenBagPackListEvent([]), rooms,
             new StorageKamasUpdateEvent(0), new ConfigurationEvent(null), new BonusesEvent([]), new CharacterLoadingCompleteEvent(),
-            new CharacterAppearanceCollectionEvent(null), new OutfitAuraChangedEvent(), new OrnamentSelectedEvent(), new OutfitLookUpdatedEvent("", null)];
+            new CharacterAppearanceCollectionEvent(null), new OutfitAuraChangedEvent(null), new OrnamentSelectedEvent(), new OutfitLookUpdatedEvent("", null)];
         for (int i = 0; i < packets.Count; i++) AssertEvent(expected[i], packets[i]);
     }
 
@@ -248,9 +255,9 @@ public sealed class GameEntryInitialMessagesTests
     public async Task Environment_sources_keep_their_positions_and_missing_calendar_does_not_send_a_fabricated_date()
     {
         var state = new SessionState { ActiveChatChannels = [ChatChannel.Private] };
-        var environment = new EntryEnvironmentMessages(() => [9_000_000_001, 71_001], () => null, _ => { });
+        var environment = new EntryEnvironmentMessages(_ => [9_000_000_001, 71_001], () => null, _ => { });
         var initial = new GameEntryInitialMessages([], [], state, new([], _ => []), 0, 0,
-            () => new([]), EmptyArena, () => new([]), () => Selection(), () => new(0, []), environment.Zaaps, environment.Calendar,
+            () => new([]), EmptyArena, () => new([]), () => Selection(), () => new(0, []), () => environment.Zaaps(state.CharacterId), environment.Calendar,
             () => EntryInformationMessages.PreviousConnection(state.PreviousVisit), AfterSelectionMessagesTests.Empty, InitialPresentationMessagesTests.Empty);
         var (packets, _, count) = await CaptureAsync(initial);
         var names = packets.Select(MessageName).ToArray();

@@ -241,6 +241,7 @@ namespace Jondo.Unity.Server.Handlers
         private static async Task GoInsideAsync(NetworkStream? stream, Houses.Door door, int instance, long wayBackMap, int wayBackCell)
         {
             long mapaQueDeja = SessionContext.State.MapId;
+            var previousMap = SessionContext.Current.Map;
             SessionContext.State.HouseEntryMapId = wayBackMap;
             SessionContext.State.HouseEntryCell = wayBackCell;
             SessionContext.State.HouseEntryElementId = door.ElementId;
@@ -252,7 +253,7 @@ namespace Jondo.Unity.Server.Handlers
             SessionContext.State.CellId = MapManager.GetNearestWalkableCell(door.InteriorMapId, destino);
             DatabaseManager.SaveCurrentCharacter();
 
-            await SessionRegistry.AnunciarMudanzaAsync(SessionContext.Current, mapaQueDeja);
+            await SessionRegistry.AnunciarMudanzaAsync(SessionContext.Current, previousMap);
 
             await WriteAsync(stream, ConnectionProtocol.BuildActorLeft(SessionContext.State.CharacterId));
             await WriteAsync(stream, ConnectionProtocol.Push(Op.Jqw, Pb.New().Var(1, door.InteriorMapId).Build()));
@@ -341,6 +342,7 @@ namespace Jondo.Unity.Server.Handlers
         private static async Task GoOutAsync(NetworkStream? stream)
         {
             long here = SessionContext.State.MapId;
+            var previousMap = SessionContext.Current.Map;
 
             // First the way he came in; if it is not known, the way the data says.
             long salidaMapa = SessionContext.State.HouseEntryMapId;
@@ -364,7 +366,7 @@ namespace Jondo.Unity.Server.Handlers
             SessionContext.State.HouseEntryInstance = 0;
             DatabaseManager.SaveCurrentCharacter();
 
-            await SessionRegistry.AnunciarMudanzaAsync(SessionContext.Current, here);
+            await SessionRegistry.AnunciarMudanzaAsync(SessionContext.Current, previousMap);
 
             await WriteAsync(stream, ConnectionProtocol.BuildActorLeft(SessionContext.State.CharacterId));
             await WriteAsync(stream, ConnectionProtocol.BuildLoadMap(salidaMapa));
@@ -570,40 +572,6 @@ namespace Jondo.Unity.Server.Handlers
                 GameServerProxy.BuildAccountTag(accountId));
 
         /// <summary>
-        /// The houses of a map's jss: f7, the one the viewer is inside, and f9, those on this
-        /// street that can be owned. A house nobody owns is declared too, on sale at its model's
-        /// price: without it the client knows no house behind the door and drops the buyer's khr.
-        /// No plaque of a free house was ever captured, but the client takes this one: it shows the
-        /// house as abandoned and on sale at that price, and opens the buyer's window. A building of
-        /// many copies sends one plaque per copy the street is shown, as the capture's eleven.
-        /// </summary>
-        public static void AddToMap(Pb jss, long mapId)
-        {
-            if (Houses.IsInterior(mapId))
-            {
-                var (doorMap, doorElement, instance) = CurrentHouse();
-                if (doorMap != 0 && Houses.TryGetDoor(doorMap, doorElement, out var door) && door.IsOwnable)
-                {
-                    var house = HouseStore.Of(doorMap, doorElement, instance);
-                    var street = MapManager.GetMapInfo(doorMap);
-                    if (house.Owned)
-                    {
-                        jss.Msg(7, HouseProtocol.BuildInterior(Houses.HouseIdOf(doorMap, doorElement), door.Model,
-                            street?.PosX ?? 0, street?.PosY ?? 0, PlaqueOf(house, door)));
-                    }
-                }
-            }
-
-            foreach (var door in Houses.On(mapId))
-            {
-                if (!door.IsOwnable) continue;
-                var copies = HouseStore.CopiesOf(mapId, door.ElementId, door.Copies);
-                jss.Msg(9, HouseProtocol.BuildOnMap(Houses.HouseIdOf(mapId, door.ElementId), door.Model,
-                    new long[] { door.ElementId }, copies.Select(h => PlaqueOf(h, door))));
-            }
-        }
-
-        /// <summary>
         /// izv { f1: instance, f2: house }: the plaque, answered with izr { f1: full plaque } on
         /// the request's id (sale frames 4-5). False when it names no house.
         /// </summary>
@@ -628,14 +596,11 @@ namespace Jondo.Unity.Server.Handlers
         /// The account's houses (jaa), at the world entry. Empty for an account with none, which is
         /// what the character-creation captures send.
         /// </summary>
-        public static Task SendAccountHousesAsync(NetworkStream? stream)
-            => SendAsync(stream, Op.Jaa, BuildAccountHouses(SessionContext.Current.AccountId));
-
-        public static byte[] BuildAccountHouses(long accountId)
-            => HouseProtocol.BuildAccountHouses(HouseStore.OwnedBy(accountId).Select(OwnedOf).Where(o => o != null)!);
+        public static Task SendAccountHousesAsync(GameSession session)
+            => session.SendAsync(HouseListMessages.Account(session.AccountId));
 
         /// <summary>A house as the lists carry it, with where its street is; null for a door that is not a house.</summary>
-        private static HouseProtocol.Owned? OwnedOf(HouseStore.House house)
+        internal static HouseProtocol.Owned? OwnedOf(HouseStore.House house)
         {
             if (!Houses.TryGetDoor(house.MapId, house.ElementId, out var door)) return null;
             var street = MapManager.GetMapInfo(house.MapId);
@@ -656,14 +621,13 @@ namespace Jondo.Unity.Server.Handlers
         /// At the world entry, a guild member's guild houses (jjs): what the guild window's «Casas»
         /// tab lists. Nothing for whoever has no guild.
         /// </summary>
-        public static async Task SendGuildHousesAsync(NetworkStream? stream, long characterId)
+        public static async Task SendGuildHousesAsync(GameSession session)
         {
             long guildId;
-            try { guildId = GuildStore.GuildOf(characterId)?.Id ?? 0; }
+            try { guildId = GuildStore.GuildOf(session.CharacterId)?.Id ?? 0; }
             catch { return; }
             if (guildId == 0) return;
-            var houses = HouseStore.SharedWith(guildId).Select(OwnedOf).Where(o => o != null)!;
-            await SendAsync(stream, Op.Jjs, HouseProtocol.BuildGuildHouses(houses!));
+            await session.SendAsync(HouseListMessages.Guild(guildId));
         }
 
         /// <summary>The guild's members on line are told a house is theirs now (jjp), or not any more (jjt).</summary>
@@ -707,8 +671,10 @@ namespace Jondo.Unity.Server.Handlers
         /// price, or off sale without f3; then the burst of the sale's frames 13-21 (see the class).
         /// False when no sale window is open.
         /// </summary>
-        public static async Task<bool> SellAsync(NetworkStream? stream, byte[] payload)
+        public static async Task<bool> SellAsync(GameSession session, byte[] payload)
         {
+            using var context = SessionContext.Push(session);
+            var stream = session.Stream;
             var dialog = OpenDialog(DialogKind.Sale);
             if (dialog == null || dialog.Answered) return false;
 
@@ -755,7 +721,7 @@ namespace Jondo.Unity.Server.Handlers
             }
 
             var (name, tag) = AccountTagOf(account);
-            await SendAsync(stream, Op.Jaa, BuildAccountHouses(account));
+            await SendAccountHousesAsync(session);
             await SendAsync(stream, Op.Izu, HouseProtocol.BuildSellingUpdate(name, tag, houseId, house.ForSale ? house.Price : 0, instance));
             await SendAsync(stream, Op.Izz, HouseProtocol.BuildChanged(houseId, new long[] { door.ElementId }, PlaqueOf(house, door)));
             await SendAsync(stream, Op.Kld, ConnectionProtocol.BuildDialogClosed(HouseProtocol.SaleClosed));
@@ -876,8 +842,10 @@ namespace Jondo.Unity.Server.Handlers
         /// as the yes ONLY with a buyer's window open and only when its number is the price that
         /// window showed: a kick cannot buy a house by accident. jad is taken the same way.
         /// </summary>
-        public static async Task<bool> BuyAsync(NetworkStream? stream, byte[] payload, string opcode)
+        public static async Task<bool> BuyAsync(GameSession session, byte[] payload, string opcode)
         {
+            using var context = SessionContext.Push(session);
+            var stream = session.Stream;
             var dialog = OpenDialog(DialogKind.Purchase);
             if (dialog == null || dialog.Answered) return false;
 
@@ -924,7 +892,7 @@ namespace Jondo.Unity.Server.Handlers
 
             var house = HouseStore.Of(door.MapId, door.ElementId, dialog.Instance);
             await SendDoorAndPlaqueAsync(stream, door, house, buyer);
-            await SendAsync(stream, Op.Jaa, BuildAccountHouses(buyer));
+            await SendAccountHousesAsync(session);
             await SendAsync(stream, Op.Kld, ConnectionProtocol.BuildDialogClosed(HouseProtocol.SaleClosed));
 
             await TellTheStreetAsync(door, house);
@@ -954,7 +922,7 @@ namespace Jondo.Unity.Server.Handlers
         /// </summary>
         private static async Task TellTheSellerAsync(HouseStore.Purchase done, string buyerName)
         {
-            byte[] houses = ConnectionProtocol.Push(Op.Jaa, BuildAccountHouses(done.SellerAccountId));
+            var houses = HouseListMessages.Account(done.SellerAccountId);
             byte[] bought = ConnectionProtocol.Push(Op.Lqn, ConnectionProtocol.BuildInfoMessage(HouseBoughtType, HouseBought,
                 done.Price.ToString(CultureInfo.InvariantCulture), buyerName ?? ""));
             byte[]? lots = done.LotsToSeller > 0
@@ -1100,8 +1068,10 @@ namespace Jondo.Unity.Server.Handlers
         /// his guild, with these rights, or stops sharing it. Not while it is on sale (1/336). The
         /// client is told with jak, the street with the plaque (izz) and the owner's list (jaa).
         /// </summary>
-        public static async Task<bool> ShareWithGuildAsync(NetworkStream? stream, byte[] payload)
+        public static async Task<bool> ShareWithGuildAsync(GameSession session, byte[] payload)
         {
+            using var context = SessionContext.Push(session);
+            var stream = session.Stream;
             byte[]? jao = ConnectionProtocol.ReadPayload(payload, Op.Jao);
             if (jao == null) return false;
             bool share = VarOf(jao, 1) != 0;
@@ -1132,7 +1102,7 @@ namespace Jondo.Unity.Server.Handlers
             if (house.GuildId > 0) await TellTheGuildAsync(house.GuildId, house, door);
             await SendAsync(stream, Op.Jak, HouseProtocol.BuildGuildRights(houseId, instance, GuildBlockOf(house), house.GuildRights));
             await TellTheStreetAsync(door, house);
-            await SendAccountHousesAsync(stream);
+            await SendAccountHousesAsync(session);
             Console.WriteLine($"[Houses] House {houseId}/{instance} " + (guildId > 0 ? $"shared with guild {guildId}, rights {house.GuildRights}." : "no longer shared."));
             return true;
         }

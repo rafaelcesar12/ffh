@@ -98,6 +98,15 @@ namespace Jondo.Unity.Server
         public int StatWisdom { get; set; }
         public int StatStrength { get; set; }
 
+        /// <summary>
+        /// The AP and MP reduction a game master gave himself with ".stats retpa|retpm", on top of what
+        /// wisdom and the gear give (FightHandler.RellenarLaFicha). A test aid: never saved, gone at
+        /// the next login. A removal is rolled against it, so a spell that steals AP can be tried on
+        /// a boss that dodges nearly everything.
+        /// </summary>
+        public int StaffApReduction { get; set; }
+        public int StaffMpReduction { get; set; }
+
         /// <summary>Where this session connected from. It is kept for next time.</summary>
         public string ClientIp { get; set; } = "";
 
@@ -263,6 +272,7 @@ namespace Jondo.Unity.Server
         /// is its own, answered with the empty kld of «abrir libro el escudo de feca y leerlo».
         /// </summary>
         public bool DocumentOpen { get; set; }
+        public int DocumentItemTemplate { get; set; }
 
         /// <summary>
         /// The criminal whose report a jailer was just paid for, so his «Listen carefully» -- one

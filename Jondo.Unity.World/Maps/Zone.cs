@@ -189,7 +189,10 @@ namespace Jondo.Unity.World.Maps
         public static int FalloffCells(int shape, int size, int minSize, int caster, int centre, int target)
         {
             if (!MapGeometry.IsValid(centre) || !MapGeometry.IsValid(target)) return 0;
-            if (shape is 0 or ' ' or TodoElMapa or WholeMap || size > 50) return 0;
+            // A point is one cell, its own centre: whoever its row lands on takes it whole, however
+            // far from the aimed cell the mask found him. Esfera de Xelor's 25% return and Arenas
+            // del Tiempo's bounces are "P" rows, and lost 10% a cell to the attacker's distance.
+            if (shape is 0 or ' ' or Punto or TodoElMapa or WholeMap || size > 50) return 0;
 
             int measure;
             switch (shape)
@@ -311,10 +314,9 @@ namespace Jondo.Unity.World.Maps
                     // from the caster to the centre. The same bar as '-'; where the two differ
                     // is not measured (the client's text keeps '-' for line casts only).
                     fuera.Add(centro);
-                    var d = DireccionEntre(desde, centro);
-                    if (!d.HasValue) return fuera;
-                    Estirar(fuera, centro, -d.Value.Dy, d.Value.Dx, tamano);
-                    Estirar(fuera, centro, d.Value.Dy, -d.Value.Dx, tamano);
+                    var d = Direcciones[Heading(desde, centro)];
+                    Estirar(fuera, centro, -d.Dy, d.Dx, tamano);
+                    Estirar(fuera, centro, d.Dy, -d.Dx, tamano);
                     return fuera;
                 }
 
@@ -552,23 +554,25 @@ namespace Jondo.Unity.World.Maps
                 case Linea:
                 case DiagonalLine:
                 {
-                    // They carry on straight in the direction it was cast in.
+                    // They carry on straight in the direction it was cast in. Cast on the
+                    // caster's own cell, that is direction 1, as for every shape that turns
+                    // (grw::blht asks og::ovk, which answers 1 for two equal cells): each of
+                    // Funoroshi's fires lays its L1 glyph (16863) on itself and the cell below
+                    // to its right, the one a player steps on to put it out.
                     fuera.Add(centro);
-                    var d = DireccionEntre(desde, centro);
-                    if (d.HasValue) Estirar(fuera, centro, d.Value.Dx, d.Value.Dy, tamano);
+                    var d = Direcciones[Heading(desde, centro)];
+                    Estirar(fuera, centro, d.Dx, d.Dy, tamano);
                     return fuera;
                 }
 
                 case LineaPerpendicular:
                 {
                     // The centre and a ray to each side of it, across the cast: the direction
-                    // turned a quarter both ways. Without a direction -- the caster standing on
-                    // the centre -- it is the centre alone.
+                    // turned a quarter both ways, direction 1 on the caster's own cell.
                     fuera.Add(centro);
-                    var d = DireccionEntre(desde, centro);
-                    if (!d.HasValue) return fuera;
-                    Estirar(fuera, centro, -d.Value.Dy, d.Value.Dx, tamano);
-                    Estirar(fuera, centro, d.Value.Dy, -d.Value.Dx, tamano);
+                    var d = Direcciones[Heading(desde, centro)];
+                    Estirar(fuera, centro, -d.Dy, d.Dx, tamano);
+                    Estirar(fuera, centro, d.Dy, -d.Dx, tamano);
                     return fuera;
                 }
 
@@ -793,9 +797,27 @@ namespace Jondo.Unity.World.Maps
             int dx = d.Value.Dx, dy = d.Value.Dy;
             if (casillas < 0) { dx = -dx; dy = -dy; }   // pulling is the same the other way round
 
-            return PushAlong(aQuien, dx, dy, Math.Abs(casillas), pisables, ocupadas, paran, portal,
-                             pullCentre: casillas < 0 ? centro : -1);
+            return PushAlong(aQuien, dx, dy, StepsFor(Math.Abs(casillas), dx, dy), pisables, ocupadas,
+                             paran, portal, pullCentre: casillas < 0 ? centro : -1);
         }
+
+        /// <summary>
+        /// The steps a displacement of <paramref name="cells"/> cells takes along (dx, dy): as many
+        /// along a walking axis, half of them rounded up along a diagonal, where one step is two
+        /// cells away.
+        /// </summary>
+        /// <remarks>
+        /// The client's fight preview (3.6.10.11, haf.bnbp, the one routine behind every push and
+        /// pull it previews) sets <c>cells = (int)Math.Ceiling(cells * 0.5f)</c> when the way is
+        /// even (og.ovo, a diagonal in our (x, y)), and doubles back the steps left short when it
+        /// works out a crash (haf.guf, see EffectEngine.CollisionOf). The official captures agree:
+        /// every diagonal push of 2 goes one step (Flecha tiránica, Flecha impactante, Pánico,
+        /// Jurón...), pushes of 3 go two (Diamantes destructores, the troll fair's gladiators),
+        /// and none goes further. Walked whole, Violencia's 4 took a fighter four steps where the
+        /// client's preview drew him two away.
+        /// </remarks>
+        public static int StepsFor(int cells, int dx, int dy)
+            => dx != 0 && dy != 0 ? (cells + 1) / 2 : cells;
 
         /// <summary>
         /// A displacement of <paramref name="cells"/> cells from <paramref name="from"/>, one

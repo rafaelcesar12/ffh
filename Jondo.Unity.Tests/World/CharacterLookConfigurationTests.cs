@@ -57,7 +57,8 @@ public sealed class CharacterLookConfigurationTests : IDisposable
         var world = Parse(CharacterLookBuilder.MapLook(character));
         Assert.Equal(3025, Bone(world));
         Assert.Equal(new long[] { 6, 2 }, Children(world).Select(child => Number(child, 4)));
-        Assert.Equal(170, Bone(ChildLook(Children(world)[0])));
+        // The power aura (22) below level 200 is its level 100 bones.
+        Assert.Equal(Cosmetics.PowerAuraBelow200Bones, Bone(ChildLook(Children(world)[0])));
         var rider = ChildLook(Children(world)[1]);
         Assert.Equal(2, Bone(rider));
         AssertBody(rider, 5881, [1791, 3494]);
@@ -94,6 +95,15 @@ public sealed class CharacterLookConfigurationTests : IDisposable
         Assert.Equal(3, Number(appearance, 2));
         Assert.Empty(Children(equipment));
         Assert.Empty(Children(appearance));
+        var (semanticEquipment, semanticAppearance) = CharacterLookBuilder.SemanticPresetLooks(character, [(7, Cape)]);
+        Assert.Equal(0, semanticEquipment.LookType);
+        Assert.Equal(3, semanticAppearance.LookType);
+        Assert.Equal(new[] { 5881, HeadTable.SkinFor(character.HeadId, character.Breed, character.Sex), CapeSkin }, semanticEquipment.Skins);
+        Assert.Equal(new[] { 5881, HeadTable.SkinFor(character.HeadId, character.Breed, character.Sex), 1791, 3494 }, semanticAppearance.Skins);
+        Assert.Equal(semanticEquipment.Colors, semanticAppearance.Colors);
+        Assert.Equal(new[] { 82 }, semanticEquipment.Scales);
+        Assert.Empty(semanticEquipment.SubEntities);
+        Assert.Empty(semanticAppearance.SubEntities);
 
         string colors = "1=#112233,2=#000000,3=#FFFFFF,4=#000004,5=#000005,6=#000006";
         Assert.Equal($"{{1|{string.Join(",", Packed(appearance, 6))}|{colors}|{Packed(bare, 5)[0]}}}",

@@ -71,7 +71,7 @@ namespace Jondo.Unity.Tests.Launcher
             using var json = JsonDocument.Parse("""
                 { "tag_name": "v0.3.0", "name": "v0.3.0", "body": "notes", "published_at": "2026-11-15T10:00:00Z",
                   "assets": [ { "name": "manifest-win-x64.json", "browser_download_url": "https://x/m.json", "size": 1234 },
-                              { "name": "Jondo-Full-v0.3.0-win-x64.zip", "browser_download_url": "https://x/f.zip", "size": 99 } ] }
+                              { "name": "JondoEmu-v0.3.0-win-x64.zip", "browser_download_url": "https://x/f.zip", "size": 99 } ] }
                 """);
             var release = ReleaseFeed.Parse(json.RootElement);
             Assert.Equal("v0.3.0", release.Tag);
@@ -214,6 +214,47 @@ namespace Jondo.Unity.Tests.Launcher
                 Assert.True(read.Files.ContainsKey("datos/a.json"));   // paths compare without case
             }
             finally { System.IO.File.Delete(file); }
+        }
+
+        /// <summary>
+        /// A repair as the player, of a folder he may write in but whose rights he may not change --
+        /// Program Files after the install gave it to him: the rights are left as they are, where
+        /// changing them again threw "Attempted to perform an unauthorized operation".
+        /// </summary>
+        [Fact]
+        public void A_repair_leaves_the_rights_of_a_folder_the_player_can_already_write_in()
+        {
+            // An administrator may change any folder's rights; the case is the player's.
+            if (!OperatingSystem.IsWindows() || SystemIntegration.IsElevated()) return;
+
+            string root = Path.Combine(Path.GetTempPath(), "jondo-rights-" + Guid.NewGuid().ToString("N"));
+            var folder = Directory.CreateDirectory(root);
+            string player = SystemIntegration.CurrentUserSid();
+            try
+            {
+                // Modify for the player, and «owner rights» to Modify too, which takes away the
+                // owner's own right to change the folder's rights.
+                var rights = new System.Security.AccessControl.DirectorySecurity();
+                rights.SetAccessRuleProtection(true, false);
+                foreach (var who in new[] { "S-1-3-4", player })
+                    rights.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
+                        new System.Security.Principal.SecurityIdentifier(who),
+                        System.Security.AccessControl.FileSystemRights.Modify | System.Security.AccessControl.FileSystemRights.Synchronize,
+                        System.Security.AccessControl.InheritanceFlags.ContainerInherit | System.Security.AccessControl.InheritanceFlags.ObjectInherit,
+                        System.Security.AccessControl.PropagationFlags.None, System.Security.AccessControl.AccessControlType.Allow));
+                folder.SetAccessControl(rights);
+                // The case itself: adding a rule, as the install does, is refused to the player.
+                var again = folder.GetAccessControl();
+                again.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
+                    new System.Security.Principal.SecurityIdentifier(player),
+                    System.Security.AccessControl.FileSystemRights.ReadAndExecute,
+                    System.Security.AccessControl.AccessControlType.Allow));
+                Assert.Throws<UnauthorizedAccessException>(() => folder.SetAccessControl(again));
+
+                Assert.False(SystemIntegration.GiveThePlayerTheFolder(root, player));
+                Assert.False(SystemIntegration.NeedsElevation(root));
+            }
+            finally { Directory.Delete(root, true); }
         }
 
         // ─── Archives ──────────────────────────────────────────────────────────

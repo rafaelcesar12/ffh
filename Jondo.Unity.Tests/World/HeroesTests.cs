@@ -1,6 +1,7 @@
-using System;
+﻿using System;
 using System.Linq;
 using System.Threading.Tasks;
+using Jondo.Unity.Protocol;
 using Jondo.Unity.Server;
 using Jondo.Unity.Server.Handlers;
 using Jondo.Unity.Server.Managers;
@@ -8,6 +9,7 @@ using Jondo.Unity.Server.Network;
 using Jondo.Unity.Tests.Economy;
 using Jondo.Unity.World.Fights;
 using Xunit;
+using QuestEngine = Jondo.Unity.Server.Managers.Quests;
 
 namespace Jondo.Unity.Tests.World
 {
@@ -71,6 +73,151 @@ namespace Jondo.Unity.Tests.World
         }
 
         [Fact]
+        public async Task Quest_sharing_is_on_by_default_respects_opting_out_and_each_heros_quest_requirements()
+        {
+            const int posterQuest = 1565;
+            const int cellarQuest = 1633, inspectCellar = 9895, lureRat = 9769;
+            const long cellar = 153358340;
+            const int tap = 489505, lemonade = 8543;
+            QuestEngine.Load();
+
+            string tag = Guid.NewGuid().ToString("N")[..6];
+            long master = Character(Account, "Maestro-" + tag, 8);
+            long optedIn = Character(Account, "Sigue-" + tag, 1);
+            long lowLevel = Character(Account, "Nivel-" + tag, 1);
+            long optedOut = Character(Account, "Solo-" + tag, 1);
+            await using var pipe = await ClientPipe.OpenAsync(Account, master, Map, "Maestro-" + tag);
+            try
+            {
+                Assert.Equal("ok", Heroes.Connect(pipe.Session, optedIn));
+                Assert.Equal("ok", Heroes.Connect(pipe.Session, lowLevel));
+                Assert.Equal("ok", Heroes.Connect(pipe.Session, optedOut));
+                // On by default (Keka-Bron/JondoEmu#206): forgetting to turn it on left heroes behind.
+                Assert.True(Heroes.SharesQuests(optedIn) && Heroes.SharesQuests(lowLevel) && Heroes.SharesQuests(optedOut));
+                Assert.True(Heroes.SetQuestSync(master, optedOut, false));
+                Assert.False(Heroes.SharesQuests(optedOut));
+                Assert.False(Heroes.SetQuestSync(master + 1, optedIn, true));
+                Assert.True(Heroes.SetQuestSync(master, optedIn, true));
+                Assert.True(Heroes.SetQuestSync(master, lowLevel, true));
+
+                var eligible = Heroes.SessionOf(optedIn)!.State;
+                var ineligible = Heroes.SessionOf(lowLevel)!.State;
+                var disabled = Heroes.SessionOf(optedOut)!.State;
+                eligible.CharacterLevel = disabled.CharacterLevel = pipe.Session.State.CharacterLevel = 150;
+
+                using (SessionContext.Push(pipe.Session))
+                {
+                    QuestEngine.LoadFrom(master);
+                    pipe.Session.State.DocumentOpen = true;
+                    await QuestHandler.StartFromDocumentAsync(pipe.Session,
+                        ConnectionProtocol.Push("ido", Pb.New().Var(1, posterQuest).Build()));
+
+                    Assert.True(QuestEngine.Log!.Active(posterQuest));
+                    Assert.True(eligible.Quests!.Active(posterQuest));
+                    Assert.False(ineligible.Quests!.Active(posterQuest));
+                    Assert.False(disabled.Quests!.Active(posterQuest));
+                    // The one who could not follow is kept, with why; the one turned off on purpose is not.
+                    var tooLow = Assert.Single(Heroes.LagsOf(pipe.Session, lowLevel));
+                    Assert.Equal((posterQuest, Heroes.QuestLagReason.Requirements), (tooLow.QuestId, tooLow.Reason));
+                    Assert.Empty(Heroes.LagsOf(pipe.Session, optedIn));
+                    Assert.Empty(Heroes.LagsOf(pipe.Session, optedOut));
+
+                    Assert.True(await QuestEngine.StartSharedAsync(pipe.Session, cellarQuest));
+                    Assert.True(eligible.Quests.Active(cellarQuest));
+                    Assert.True(ineligible.Quests.Active(cellarQuest));
+                    Assert.True(Heroes.SetQuestSync(master, lowLevel, false));
+                    // Turned off: what he had not followed is no longer news.
+                    Assert.Empty(Heroes.LagsOf(pipe.Session, lowLevel));
+                    eligible.MapId = ineligible.MapId = pipe.Session.State.MapId = cellar;
+
+                    Assert.True(await QuestEngine.OnInteractiveUsedAsync(pipe.Session, cellar, tap));
+                    Assert.True(QuestEngine.Log.ObjectiveDone(inspectCellar));
+                    Assert.True(eligible.Quests.ObjectiveDone(inspectCellar));
+                    Assert.False(ineligible.Quests.ObjectiveDone(inspectCellar));
+
+                    // One lemonade for the master and his hero: all or nobody, so nobody pours it, nothing
+                    // is moved, and the master is told (Keka-Bron/JondoEmu#206).
+                    Assert.True(await Equipment.GiveAsync(pipe.ToClient, lemonade, 1));
+                    await QuestEngine.OnInteractiveUsedAsync(pipe.Session, cellar, tap);
+                    Assert.False(QuestEngine.Log.ObjectiveDone(lureRat));
+                    Assert.False(eligible.Quests.ObjectiveDone(lureRat));
+                    Assert.Equal(1, Equipment.HowMany(lemonade));
+                    Assert.Empty(Heroes.LagsOf(pipe.Session, optedIn));
+                    Assert.Contains(await WarningsAsync(pipe), text => text.Contains("Nadie avanza") && text.Contains(" 1 "));
+
+                    // Two, both in the master's bag: the hero's is handed to him, and each pours his own.
+                    Assert.True(await Equipment.GiveAsync(pipe.ToClient, lemonade, 1));
+                    Assert.True(await QuestEngine.OnInteractiveUsedAsync(pipe.Session, cellar, tap));
+                    Assert.True(QuestEngine.Log.ObjectiveDone(lureRat));
+                    Assert.True(eligible.Quests.ObjectiveDone(lureRat));
+                    Assert.Equal(0, Equipment.HowMany(lemonade));
+                    using (SessionContext.Push(Heroes.SessionOf(optedIn)!)) Assert.Equal(0, Equipment.HowMany(lemonade));
+                    Assert.Empty(Heroes.LagsOf(pipe.Session, optedIn));
+                }
+
+                Assert.True(Heroes.Disconnect(master, optedIn));
+                Assert.Equal("ok", Heroes.Connect(pipe.Session, optedIn));
+                Assert.True(Heroes.SharesQuests(optedIn));
+                Assert.True(Heroes.SessionOf(optedIn)!.State.Quests!.ObjectiveDone(inspectCellar));
+            }
+            finally
+            {
+                Heroes.SetQuestSync(master, optedIn, false);
+                Heroes.SetQuestSync(master, lowLevel, false);
+                Heroes.DisconnectAll(master);
+                SessionRegistry.Unregister(pipe.Session);
+                foreach (long character in new[] { master, optedIn, lowLevel, optedOut })
+                    DatabaseManager.DeleteCharacter(character, Account);
+            }
+        }
+
+        [Fact]
+        public async Task A_party_invitation_to_a_hero_goes_to_whoever_plays_him()
+        {
+            string tag = Guid.NewGuid().ToString("N")[..6];
+            long other = Account + 1;
+            long master = Character(Account, "Joue-" + tag, 8);
+            long hero = Character(Account, "Suit-" + tag, 1);
+            long inviter = Character(other, "Invite-" + tag, 2);
+            await using var played = await ClientPipe.OpenAsync(Account, master, Map, "Joue-" + tag);
+            await using var asking = await ClientPipe.OpenAsync(other, inviter, Map, "Invite-" + tag);
+            try
+            {
+                Assert.Equal("ok", Heroes.Connect(played.Session, hero));
+
+                // The hero, among the others standing there: his master is the one asked (#217).
+                using (SessionContext.Push(asking.Session))
+                    await PartyHandler.InviteAsync(asking.ToClient, ConnectionProtocol.Push(Op.Ime,
+                        Pb.New().Msg(1, Pb.New().Msg(4, Pb.New().Str(1, "Suit-" + tag))).Build()));
+                var party = Parties.Of(inviter);
+                Assert.NotNull(party);
+                Assert.True(party!.Pending.ContainsKey(master));
+                Assert.False(party.Pending.ContainsKey(hero));
+                // The invitation's popup, on the master's client, after his hero's drawing on the map.
+                string seen;
+                do seen = (await played.NextAny()).Opcode; while (seen != Op.Ijz);
+                Parties.Dissolve(party);
+
+                // One's own hero: whoever plays him is oneself, nobody is asked.
+                using (SessionContext.Push(played.Session))
+                    await PartyHandler.InviteAsync(played.ToClient, ConnectionProtocol.Push(Op.Ime,
+                        Pb.New().Msg(1, Pb.New().Msg(4, Pb.New().Str(1, "Suit-" + tag))).Build()));
+                Assert.False(Parties.Of(master)?.Pending.Any() == true);
+            }
+            finally
+            {
+                if (Parties.Of(inviter) is { } left) Parties.Dissolve(left);
+                if (Parties.Of(master) is { } own) Parties.Dissolve(own);
+                Heroes.DisconnectAll(master);
+                SessionRegistry.Unregister(played.Session);
+                SessionRegistry.Unregister(asking.Session);
+                foreach (long character in new[] { master, hero })
+                    DatabaseManager.DeleteCharacter(character, Account);
+                DatabaseManager.DeleteCharacter(inviter, other);
+            }
+        }
+
+        [Fact]
         public async Task A_hero_chosen_from_a_client_of_his_own_is_nobodys_hero_any_more()
         {
             string tag = Guid.NewGuid().ToString("N")[..6];
@@ -121,6 +268,19 @@ namespace Jondo.Unity.Tests.World
                 Assert.Equal(100, plan[master].Xp);   // each keeps his experience and kamas
                 Assert.Equal(10, plan[master].Kamas);
                 Assert.Equal(4, plan[777].Loot[287]);
+
+                // A quest's item dropped for one alone stays his: the bag of jewels of 1648, which
+                // all went to the recipient and left the others' quests stuck.
+                plan = new System.Collections.Generic.Dictionary<long, FightHandler.Reward>
+                {
+                    [master] = new() { Loot = new() { [16540] = 1, [287] = 2 }, Own = new() { [16540] = 1 } },
+                    [hero] = new() { Loot = new() { [16540] = 1 }, Own = new() { [16540] = 1 } },
+                };
+                FightHandler.GatherHeroLoot(plan);
+                Assert.Equal(1, plan[master].Loot[16540]);
+                Assert.False(plan[master].Loot.ContainsKey(287));
+                Assert.Equal(1, plan[hero].Loot[16540]);
+                Assert.Equal(2, plan[hero].Loot[287]);
 
                 // The same one again: back to each his own.
                 Assert.True(Heroes.SetLootTo(master, hero));
@@ -271,6 +431,157 @@ namespace Jondo.Unity.Tests.World
                 Heroes.DisconnectAll(hero);
                 Heroes.DisconnectAll(master);
                 SessionRegistry.Unregister(pipe.Session);
+            }
+        }
+
+        /// <summary>
+        /// Taking a hero in hand sends his own quest journal and achievements: with no map loaded
+        /// again, the client kept showing those of the one played before until the next login (#198).
+        /// </summary>
+        [Fact]
+        public async Task A_hero_taken_in_hand_is_shown_his_own_quest_journal_and_achievements()
+        {
+            QuestEngine.Load();
+            Achievements.Load();
+            string tag = Guid.NewGuid().ToString("N")[..6];
+            long master = Character(Account + 12, "Diario-" + tag, 8);
+            long hero = Character(Account + 12, "Pagina-" + tag, 9);
+            // The same quest, done by the master and still under way for the hero.
+            DatabaseManager.SaveQuestProgress(master, new DatabaseManager.QuestRow(1648, 0, "", true));
+            DatabaseManager.SaveQuestProgress(hero, new DatabaseManager.QuestRow(1648, 2268, "", false));
+            var codec = new Recording();
+            await using var pipe = await ClientPipe.OpenAsync(Account + 12, master, Map, "Diario-" + tag, codec);
+            using var reading = new System.Threading.CancellationTokenSource();
+            var drain = Task.Run(async () =>
+            {
+                var buffer = new byte[65536];
+                try { while (!reading.IsCancellationRequested && await pipe.FromServer.ReadAsync(buffer, reading.Token) > 0) { } }
+                catch { }
+            });
+            try
+            {
+                if (!MapManager.Maps.ContainsKey(RealMap)) MapManager.Initialize();
+                if (MapManager.Maps.TryGetValue(RealMap, out var real)) MapManager.Maps[Map] = real;
+                if (MapManager.WalkableCells.TryGetValue(RealMap, out var cells)) MapManager.WalkableCells[Map] = cells;
+                using (SessionContext.Push(pipe.Session)) DatabaseManager.LoadCharacter(master);
+                Assert.Equal("ok", Heroes.Connect(pipe.Session, hero));
+
+                int before = codec.Frames.Count;
+                Assert.Equal("ok", await HeroSwitch.SwitchAsync(pipe.Session, hero));
+
+                var journal = Assert.Single(codec.Frames.Skip(before).Select(f => f.Content).OfType<Jondo.Unity.Protocol.Game.QuestsEvent>());
+                Assert.Contains(journal.ActiveQuests, quest => quest.QuestId == 1648);
+                Assert.DoesNotContain(journal.FinishedQuests, quest => quest.QuestId == 1648);
+                // And his achievements: the window kept the one played before's as well.
+                Assert.Single(codec.Frames.Skip(before).Select(f => f.Content).OfType<Jondo.Unity.Protocol.Game.AchievementsEvent>());
+            }
+            finally
+            {
+                reading.Cancel();
+                Heroes.DisconnectAll(hero);
+                Heroes.DisconnectAll(master);
+                SessionRegistry.Unregister(pipe.Session);
+            }
+        }
+
+        /// <summary>
+        /// A master trades with a hero of his: the window opens at once, the hero takes what is
+        /// laid down as soon as his master is ready. Asking another player's hero asks the character
+        /// that player plays (#199).
+        /// </summary>
+        [Fact]
+        public async Task A_master_trades_with_his_own_hero_and_anothers_goes_to_his_master()
+        {
+            string tag = Guid.NewGuid().ToString("N")[..6];
+            long master = Character(Account + 13, "Dador-" + tag, 8);
+            long hero = Character(Account + 13, "Tomador-" + tag, 9);
+            long stranger = Character(Account + 14, "Vecino-" + tag, 1);
+            long strangersHero = Character(Account + 14, "Escudero-" + tag, 2);
+            await using var pipe = await ClientPipe.OpenAsync(Account + 13, master, Map, "Dador-" + tag);
+            await using var other = await ClientPipe.OpenAsync(Account + 14, stranger, Map, "Vecino-" + tag);
+            using var reading = new System.Threading.CancellationTokenSource();
+            foreach (var p in new[] { pipe, other })
+                _ = Task.Run(async () =>
+                {
+                    var buffer = new byte[65536];
+                    try { while (!reading.IsCancellationRequested && await p.FromServer.ReadAsync(buffer, reading.Token) > 0) { } }
+                    catch { }
+                });
+            long uid = DatabaseManager.NextItemUid();
+            try
+            {
+                Assert.Equal("ok", Heroes.Connect(pipe.Session, hero));
+                Assert.Equal("ok", Heroes.Connect(other.Session, strangersHero));
+                var heroSession = Heroes.SessionOf(hero)!;
+                pipe.Session.State.Kamas = 5_000;
+                long heroKamas = heroSession.State.Kamas;
+                using (SessionContext.Push(pipe.Session))
+                {
+                    Assert.True(DatabaseManager.InsertCharacterItem(uid, master, 6902, 3, Equipment.Bag, null));
+                    Equipment.Add(uid, 6902, 3, Equipment.Bag, null);
+                }
+
+                byte[] Ask(long whom) => ConnectionProtocol.Push(Op.Keu, Pb.New().Var(2, whom).Build());
+
+                // Another player's hero: asked of the character that player plays, who can accept.
+                using (SessionContext.Push(pipe.Session)) await TradeHandler.RequestAsync(null!, Ask(strangersHero));
+                var asked = pipe.Session.State.Trade;
+                Assert.NotNull(asked);
+                Assert.Equal(stranger, asked!.TargetId);
+                Assert.False(asked.Accepted);
+                Assert.Same(asked, other.Session.State.Trade);
+                Assert.Null(Heroes.SessionOf(strangersHero)!.State.Trade);
+                using (SessionContext.Push(other.Session)) Assert.True(await TradeHandler.CloseAsync());
+                Assert.Null(pipe.Session.State.Trade);
+
+                // His own: open at once, nobody to accept.
+                using (SessionContext.Push(pipe.Session)) await TradeHandler.RequestAsync(null!, Ask(hero));
+                var trade = pipe.Session.State.Trade;
+                Assert.NotNull(trade);
+                Assert.True(trade!.Accepted);
+                Assert.Same(trade, heroSession.State.Trade);
+
+                using (SessionContext.Push(pipe.Session))
+                {
+                    await TradeHandler.MoveAsync(null!, ConnectionProtocol.Push(Op.Kcr, Pb.New().Var(1, 2).Var(2, uid).Build()));
+                    await TradeHandler.KamasAsync(null!, ConnectionProtocol.Push(Op.Kee, Pb.New().Var(1, 3_000).Build()));
+                    // His "ready" is enough: the hero always is.
+                    await TradeHandler.ReadyAsync(null!, ConnectionProtocol.Push(Op.Kep, Pb.New().Var(1, 1).Var(2, 3).Build()));
+                }
+
+                Assert.True(trade.Ended);
+                Assert.Null(pipe.Session.State.Trade);
+                Assert.Null(heroSession.State.Trade);
+                Assert.Equal(2_000, pipe.Session.State.Kamas);
+                Assert.Equal(heroKamas + 3_000, heroSession.State.Kamas);
+                using (SessionContext.Push(pipe.Session)) Assert.Equal(1, Equipment.ByUid(uid)!.Quantity);
+                using (SessionContext.Push(heroSession))
+                    Assert.Contains(Equipment.All, i => i.Template == 6902 && i.Quantity == 2 && i.Uid != uid);
+            }
+            finally
+            {
+                reading.Cancel();
+                foreach (long id in new[] { master, hero })
+                    foreach (var row in DatabaseManager.LoadInventory(id))
+                        DatabaseManager.DestroyCharacterItem(id, row.Uid, 0);
+                Heroes.DisconnectAll(master);
+                Heroes.DisconnectAll(stranger);
+                SessionRegistry.Unregister(pipe.Session);
+                SessionRegistry.Unregister(other.Session);
+            }
+        }
+
+        /// <summary>The real codec, keeping what it encodes.</summary>
+        private sealed class Recording : Jondo.Unity.Protocol.Game.IGameCodec
+        {
+            private readonly Jondo.Unity.Protocol.Game.Wire.GameCodec _real = new();
+            public readonly System.Collections.Concurrent.ConcurrentQueue<Jondo.Unity.Protocol.Game.GameFrame> Queue = new();
+            public System.Collections.Generic.List<Jondo.Unity.Protocol.Game.GameFrame> Frames => Queue.ToList();
+            public Jondo.Unity.Protocol.Game.GameFrame Decode(ReadOnlySpan<byte> payload) => _real.Decode(payload);
+            public byte[] Encode(Jondo.Unity.Protocol.Game.GameFrame message)
+            {
+                Queue.Enqueue(message);
+                return _real.Encode(message);
             }
         }
 
@@ -480,6 +791,84 @@ namespace Jondo.Unity.Tests.World
 
                 // In a fight, he stays connected until it is over.
                 Assert.False(Heroes.Disconnect(master, hero));
+            }
+            finally
+            {
+                Heroes.DisconnectAll(master);
+                SessionRegistry.Unregister(pipe.Session);
+            }
+        }
+
+        /// <summary>
+        /// The free texts the master's client has been sent so far and will write: an lqn of type 0
+        /// and id 0 (FreeText). Of type 1 the client takes id 0 for an error number and writes
+        /// «L'erreur n°0 est survenue.» instead -- those are left out.
+        /// </summary>
+        private static async Task<System.Collections.Generic.List<string>> WarningsAsync(ClientPipe pipe)
+        {
+            var texts = new System.Collections.Generic.List<string>();
+            while (true)
+            {
+                var read = Jondo.Protocol.NetworkMessage.ReadFrameAsync(pipe.FromServer);
+                if (await Task.WhenAny(read, Task.Delay(TimeSpan.FromMilliseconds(500))) != read) return texts;
+                byte[] frame = await read;
+                string opcode = ConnectionProtocol.ReadOpcode(frame) ?? "";
+                if (opcode != Op.Lqn) continue;
+                byte[] payload = ConnectionProtocol.ReadPayload(frame, opcode) ?? Array.Empty<byte>();
+                var fields = ProtoMessage.Parse(payload).Fields;
+                long type = fields.Find(f => f.FieldNumber == 1)?.VarIntValue ?? 0;
+                long id = fields.Find(f => f.FieldNumber == 2)?.VarIntValue ?? 0;
+                if (type != 0 || id != 0) continue;
+                texts.Add(System.Text.Encoding.UTF8.GetString(payload));
+            }
+        }
+
+        [Fact]
+        public void A_quest_fight_is_played_alone_when_it_says_so_or_its_board_places_one_player()
+        {
+            // Caporale Mynerve's tower top flags one cell for the players: «Le combat se lance et
+            // s'effectue seul» (Dofus pour les noobs, «Mise à l'épreuve»), Keka-Bron/JondoEmu#209.
+            const long mynervesTower = 153356292, ratsCellar = 153486338;
+            Assert.True(FightHandler.PlayedAlone(null, mynervesTower));
+            // Not the arena the server picks for her fight (153885696, seen in the client), which flags
+            // no placement at all: the board is the tower she is talked to on.
+            Assert.False(FightHandler.PlayedAlone(null, 153885696));
+            // A board of eight is no word either way: a group's unless the fight says otherwise.
+            Assert.False(FightHandler.PlayedAlone(null, ratsCellar));
+            Assert.True(FightHandler.PlayedAlone(true, ratsCellar));
+            // The fight's own word over the board's.
+            Assert.False(FightHandler.PlayedAlone(false, mynervesTower));
+            Assert.False(FightHandler.PlayedAlone(null, Map));
+
+            // And the guides' word, fight by fight (npc_fights.json «solo»).
+            NpcFights.Forget();
+            Assert.True(NpcFights.For(2894, mynervesTower, 25088)?.Solo);
+            // «Quedarte y luchar contra el fuego maléfico»: alone, «il s'effectue seul», on a board of ten.
+            Assert.True(NpcFights.For(2904, 153879809, 25146)?.Solo);
+            // The Rat Soiffé of «Mort au rat !»: «faisable à plusieurs».
+            Assert.False(NpcFights.For(2912, 153358340, 25037)?.Solo);
+        }
+
+        [Fact]
+        public async Task A_fight_played_alone_keeps_the_heroes_out_and_nobody_joins_it()
+        {
+            string tag = Guid.NewGuid().ToString("N")[..6];
+            long master = Character(Account, "Recluta-" + tag, 8);
+            long hero = Character(Account, "Fuera-" + tag, 1);
+            await using var pipe = await ClientPipe.OpenAsync(Account, master, Map, "Recluta-" + tag);
+            try
+            {
+                Assert.Equal("ok", Heroes.Connect(pipe.Session, hero));
+                var fight = new FightInstance(990_312, Map, Map) { PeopleCap = 1 };
+                fight.SetPlacementCells(new System.Collections.Generic.List<int> { 300, 314 }, new System.Collections.Generic.List<int> { 100, 114 });
+                fight.AddPlayer(new Fighter { Id = master, Name = "Recluta-" + tag, Level = 50, MaxHP = 500, CurrentHP = 500 });
+
+                FightHandler.AddHeroes(fight, master);
+
+                Assert.Single(fight.Azul);
+                Assert.False(Heroes.SessionOf(hero)!.State.IsInFight);
+                // Nor anybody from the map: the side is full at one.
+                Assert.Equal(FightInstance.JoinRefusal.TeamFull, fight.CanJoin(FightInstance.Azules, FightHandler.CapOf(fight)));
             }
             finally
             {

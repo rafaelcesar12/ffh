@@ -2,7 +2,7 @@
   "_comment": [
     "Monster groups put somewhere on purpose, and Ankama's own taken away.",
     "",
-    "The 38,744 groups in world.db are Ankama's placement and are regenerated with it, so",
+    "The 38,744 groups in world.db are generated from the client's subarea rosters, so",
     "neither adding to them nor removing from them can be done in that file: the work would",
     "vanish the next time anybody rebuilt the database, without a word.",
     "",
@@ -10,7 +10,7 @@
     "    \"members\": [ { \"monster\": 2549, \"grade\": 0 } ] }",
     "  { \"map\": 241438721, \"group\": -1000000, \"remove\": true }",
     "",
-    "Ids for groups placed by hand start at -2000000 and go down. The measured ones run from",
+    "Ids for groups placed by hand start at -2000000 and go down. The seeded ones run from",
     "-1000000 to -1038743, so the two bands cannot meet and an id says which kind it is at a",
     "glance.",
     "",
@@ -30,6 +30,9 @@
     "",
     "'orientation' is which way the group faces, 1 to 7, south-east when absent.",
     "",
+    "'playerTurn' is how long a character's turn lasts in a fight against the group, in tenths of",
+    "a second; when absent, the fight's own clock (40 s, 90 s in a dream).",
+    "",
     "THE ASTRUB MILITIA TOWER'S PUNCHING BAGS. The same six Puch Ingball on 192415754, the",
     "tower's training room, where the master stands too. Cells, facings and grades are",
     "measured off the four jss of that room in 'bastante combate con steamer': one monster a",
@@ -45,13 +48,15 @@
     "Puch celestial (2785, grade 1) on Ganymed's platform 241438721, cell 327 facing 1, and a",
     "Jalatín celestial (8017) leading a Jalató celestial (2781), both grade 1, on the pen 241439745,",
     "cell 327 facing 3, as the jss of each map in that capture has them. The chafers of the last",
-    "room are NPCs there, not a group (content/npcs/spawns.json).",
+    "room are NPCs there, not a group (content/npcs/spawns.json). The Puch celestial's fight gives",
+    "ten-minute turns (playerTurn 6000): every jzc of that fight in the capture carries 6000, so the",
+    "player can read the tutorial's bubbles, while the pen's and the chafers' carry 300.",
     "",
     "THE MINOTOROR'S LABYRINTH. The base's groups on the antechamber 34473476, the Entrance 34476296",
     "and its copy 34476294 (subarea 210) hold the Minotoror (121) and the Minotot (827), the two",
     "dungeon bosses, and go. The antechamber is the room after the Minotoror and the Minotot's door;",
     "Lorkos and the great flask stand in the Entrance. The labyrinth's monsters live in its",
-    "twenty-five rooms (subarea 319).",
+    "24 combat rooms (subarea 319, indoor_spawns.json). The central room 13 is the passage to the boss.",
     "",
     "THE BLOP ENCLAVE. Bibiblop's hall 166990848, where the Royal Blop is chosen after the fourth room,",
     "and the exit room 166989826, where he takes whoever holds its key into the Royal Rainbow Blop's lair,",
@@ -696,6 +701,7 @@
       "group": -2000027,
       "cell": 327,
       "orientation": 1,
+      "playerTurn": 6000,
       "members": [
         {
           "monster": 2785,
@@ -829,6 +835,54 @@
       "map": 219152644,
       "group": -1036053,
       "remove": true
-    }
+    },
+  {
+   "map": 209192706,
+   "group": -2177001,
+   "cell": 232,
+   "orientation": 3,
+   "members": [{"monster": 6365, "grade": 0}, {"monster": 6365, "grade": 0}, {"monster": 6365, "grade": 0}],
+   "why": "One of the six groups of insects round the secluded spot [22,-34] that «Questions existentielles» (2177, 16718) asks to clear (Dofus pour les noobs («Questions existentielles»)). INFERRED: the cells, the sizes and the mix of Moskito insistente / Araknawa insistente."
+  },
+  {
+   "map": 209192706,
+   "group": -2177002,
+   "cell": 258,
+   "orientation": 3,
+   "members": [{"monster": 6364, "grade": 0}, {"monster": 6365, "grade": 0}, {"monster": 6365, "grade": 0}],
+   "why": "One of the six groups of insects round the secluded spot [22,-34] that «Questions existentielles» (2177, 16718) asks to clear (Dofus pour les noobs («Questions existentielles»)). INFERRED: the cells, the sizes and the mix of Moskito insistente / Araknawa insistente."
+  },
+  {
+   "map": 209192706,
+   "group": -2177003,
+   "cell": 284,
+   "orientation": 3,
+   "members": [{"monster": 6365, "grade": 0}, {"monster": 6365, "grade": 0}, {"monster": 6365, "grade": 0}, {"monster": 6365, "grade": 0}],
+   "why": "One of the six groups of insects round the secluded spot [22,-34] that «Questions existentielles» (2177, 16718) asks to clear (Dofus pour les noobs («Questions existentielles»)). INFERRED: the cells, the sizes and the mix of Moskito insistente / Araknawa insistente."
+  },
+  {
+   "map": 209192706,
+   "group": -2177004,
+   "cell": 205,
+   "orientation": 3,
+   "members": [{"monster": 6364, "grade": 0}, {"monster": 6364, "grade": 0}, {"monster": 6365, "grade": 0}],
+   "why": "One of the six groups of insects round the secluded spot [22,-34] that «Questions existentielles» (2177, 16718) asks to clear (Dofus pour les noobs («Questions existentielles»)). INFERRED: the cells, the sizes and the mix of Moskito insistente / Araknawa insistente."
+  },
+  {
+   "map": 209192706,
+   "group": -2177005,
+   "cell": 301,
+   "orientation": 3,
+   "members": [{"monster": 6365, "grade": 0}, {"monster": 6365, "grade": 0}, {"monster": 6364, "grade": 0}],
+   "why": "One of the six groups of insects round the secluded spot [22,-34] that «Questions existentielles» (2177, 16718) asks to clear (Dofus pour les noobs («Questions existentielles»)). INFERRED: the cells, the sizes and the mix of Moskito insistente / Araknawa insistente."
+  },
+  {
+   "map": 209192706,
+   "group": -2177006,
+   "cell": 268,
+   "orientation": 3,
+   "members": [{"monster": 6364, "grade": 0}, {"monster": 6365, "grade": 0}, {"monster": 6365, "grade": 0}, {"monster": 6365, "grade": 0}],
+   "why": "One of the six groups of insects round the secluded spot [22,-34] that «Questions existentielles» (2177, 16718) asks to clear (Dofus pour les noobs («Questions existentielles»)). INFERRED: the cells, the sizes and the mix of Moskito insistente / Araknawa insistente."
+  }
   ]
 }

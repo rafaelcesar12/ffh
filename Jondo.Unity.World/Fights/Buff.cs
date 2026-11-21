@@ -199,6 +199,13 @@ namespace Jondo.Unity.World.Fights
         public int Dado { get; set; }
         public int Cara { get; set; }
         public int Valor { get; set; }
+
+        /// <summary>
+        /// The catalogue's "dispellable" of the spell row this one was put from (see
+        /// <see cref="Buffs.DispellableByADispel"/> and the three after it), filled from that row
+        /// as it is put when its creator left it out. Zero is a row of the engine's own, from no
+        /// spell row: nothing dispels it.
+        /// </summary>
         public int Dispellable { get; set; }
 
         /// <summary>How many rounds a pending row lasts once it goes off.</summary>
@@ -343,7 +350,17 @@ namespace Jondo.Unity.World.Fights
             /// </summary>
             public bool ThroughPortal { get; set; }
 
-            public bool Vivo(int ronda) => CaducaEnRonda < 0 || ronda < CaducaEnRonda;
+            public bool Vivo(int ronda) => CaducaEnRonda < 0 || ronda < CaducaEnRonda
+                                           || (FallsAtItsCastersTurn && ronda == CaducaEnRonda);
+
+            /// <summary>
+            /// Whether it lasts as a row of its duration does: through the round it falls in, up to its
+            /// caster's turn there, where the turn start's sweep takes it (FightHandler.TurnStartSweep)
+            /// -- not from that round's first turn. Tejossus's Baikal, "+10% final damage under DM,
+            /// duration 1", cast as the round's last turn, is his until his next turn: the players who
+            /// play before it hit him with it on.
+            /// </summary>
+            public bool FallsAtItsCastersTurn { get; set; }
 
             /// <summary>
             /// How many times it goes off when its trigger comes: once per occurrence of the
@@ -372,15 +389,25 @@ namespace Jondo.Unity.World.Fights
         /// Arms rows of a spell on this fighter, in their caster's name: added to the hook that
         /// caster already has here with that spell, or a new one. Lasts the longest of the two.
         /// </summary>
+        /// <param name="fallsAtItsCastersTurn">See <see cref="ActiveSpell.FallsAtItsCastersTurn"/>.</param>
         public void ArmarFilas(int hechizo, int grado, int caducaEnRonda, long lanzador, int puestoEnRonda,
-                               IEnumerable<int> filas, bool critico = false)
+                               IEnumerable<int> filas, bool critico = false, bool fallsAtItsCastersTurn = false)
         {
             var ya = ActiveSpells.FirstOrDefault(e => e.Filas != null && e.Hechizo == hechizo && e.Lanzador == lanzador);
             if (ya != null)
             {
                 foreach (int fila in filas) ya.Filas.Add(fila);
                 ya.Grado = grado;
-                if (ya.CaducaEnRonda >= 0) ya.CaducaEnRonda = caducaEnRonda < 0 ? -1 : Math.Max(ya.CaducaEnRonda, caducaEnRonda);
+                if (ya.CaducaEnRonda >= 0)
+                {
+                    if (caducaEnRonda < 0) ya.CaducaEnRonda = -1;
+                    else if (caducaEnRonda > ya.CaducaEnRonda)
+                    {
+                        ya.CaducaEnRonda = caducaEnRonda;
+                        ya.FallsAtItsCastersTurn = fallsAtItsCastersTurn;
+                    }
+                    else if (caducaEnRonda == ya.CaducaEnRonda) ya.FallsAtItsCastersTurn |= fallsAtItsCastersTurn;
+                }
                 ya.PuestoEnRonda = puestoEnRonda;
                 return;
             }
@@ -388,6 +415,7 @@ namespace Jondo.Unity.World.Fights
             {
                 Hechizo = hechizo, Grado = grado, CaducaEnRonda = caducaEnRonda, Lanzador = lanzador,
                 PuestoEnRonda = puestoEnRonda, Critico = critico, Filas = new HashSet<int>(filas),
+                FallsAtItsCastersTurn = fallsAtItsCastersTurn && caducaEnRonda >= 0,
             });
         }
 
@@ -396,12 +424,19 @@ namespace Jondo.Unity.World.Fights
         /// rows he armed here. For a monster's death -- a Pépite's mark on Crunchidor, an Éclat's
         /// invulnerability on its escort did not outlive them, and here they did.
         /// </summary>
-        public List<Buff> QuitarLoDe(long quien)
+        /// <param name="outlivesHim">
+        /// The rows that stay all the same: the ones written to outlive their caster's death (see
+        /// <see cref="OutlivesItsCaster"/>). Without it, every row of his goes.
+        /// </param>
+        public List<Buff> QuitarLoDe(long quien, Func<Buff, bool> outlivesHim = null)
         {
-            var quitados = _puestos.FindAll(e => e.Quien == quien && !e.Pendiente);
-            _puestos.RemoveAll(e => e.Quien == quien && !e.Pendiente);
+            bool goes(Buff e) => e.Quien == quien && !e.Pendiente && (outlivesHim == null || !outlivesHim(e));
+            var quitados = _puestos.FindAll(goes);
+            _puestos.RemoveAll(goes);
             SeVan(quitados);
-            ActiveSpells.RemoveAll(e => e.Lanzador == quien);
+            // A hook goes with him as its rows would: on a death, the hooks whose every row outlives
+            // its caster stay (HookOutlivesItsCaster), or a state that stays would lose its switch.
+            ActiveSpells.RemoveAll(e => e.Lanzador == quien && (outlivesHim == null || !HookOutlivesItsCaster(e)));
             foreach (var quitado in quitados)
             {
                 if (quitado.Estado == 0 || quitado.EffectId == Jondo.Unity.World.Combat.EffectSupport.DisableState) continue;
@@ -411,10 +446,13 @@ namespace Jondo.Unity.World.Fights
         }
 
         /// <summary>Records that this spell is still on, or extends the one already there.</summary>
+        /// <param name="fallsAtItsCastersTurn">See <see cref="ActiveSpell.FallsAtItsCastersTurn"/>: for a
+        /// hook lasting as the rows its cast left, which fall at their caster's turn start.</param>
         public void Enganchar(int hechizo, int grado, int caducaEnRonda, long lanzador = 0, int puestoEnRonda = 0,
                               bool critico = false, bool throughPortal = false, int apilarHasta = 0,
-                              int celda = -1)
+                              int celda = -1, bool fallsAtItsCastersTurn = false)
         {
+            fallsAtItsCastersTurn &= caducaEnRonda >= 0;
             var ya = _enganchesPorHechizo(hechizo);
             if (ya != null)
             {
@@ -426,6 +464,7 @@ namespace Jondo.Unity.World.Fights
                 ya.Veces = !deEstaRonda ? 1 : seApila ? ya.Veces + 1 : ya.Veces;
                 ya.Grado = grado;
                 ya.CaducaEnRonda = caducaEnRonda;
+                ya.FallsAtItsCastersTurn = fallsAtItsCastersTurn;
                 ya.Lanzador = lanzador;
                 ya.PuestoEnRonda = puestoEnRonda;
                 ya.Critico = critico;
@@ -437,6 +476,7 @@ namespace Jondo.Unity.World.Fights
             {
                 Hechizo = hechizo, Grado = grado, CaducaEnRonda = caducaEnRonda, Lanzador = lanzador,
                 PuestoEnRonda = puestoEnRonda, Critico = critico, ThroughPortal = throughPortal, Celda = celda,
+                FallsAtItsCastersTurn = fallsAtItsCastersTurn,
             });
         }
 
@@ -491,15 +531,23 @@ namespace Jondo.Unity.World.Fights
         /// begun. The age-old minogolem's Sustitución carries "-1" for the state that named the
         /// one it swapped with; shortening the waiting ones as well dropped the next round's state
         /// before it was put, and it stopped swapping one round in two.
+        ///
+        /// Only the rows a dispel would take (<see cref="TakenByADispel"/>): the client shortens no
+        /// other off its jwe 1075, and the 2s, 3s and 4s are written so they stay. Regulador cast on
+        /// a Xelor in telefrag took off its own "+1 cast per turn" (a 3) and his "+2 AP once a
+        /// turn" locks (2s), and he gained AP again and again in the same turn.
+        ///
+        /// A spell whose last row falls takes its hooks with it, as a 406 does: Aguja's poison
+        /// still went off on a telefrag after its 2328 had fallen.
         /// </remarks>
-        public int Acortar(int rondas, int ahora)
+        public List<Buff> Acortar(int rondas, int ahora)
         {
-            if (rondas <= 0) return 0;
-
             var caidos = new List<Buff>();
+            if (rondas <= 0) return caidos;
+
             foreach (var embrujo in _puestos)
             {
-                if (embrujo.CaducaEnRonda <= 0 || embrujo.Pendiente) continue;
+                if (embrujo.CaducaEnRonda <= 0 || !TakenByADispel(embrujo)) continue;
 
                 embrujo.CaducaEnRonda -= rondas;
                 if (embrujo.CaducaEnRonda <= ahora) caidos.Add(embrujo);
@@ -513,7 +561,11 @@ namespace Jondo.Unity.World.Fights
                 if (muerto.Estado == 0 || muerto.EffectId == Jondo.Unity.World.Combat.EffectSupport.DisableState) continue;
                 if (!SigueHabiendo(muerto.Estado)) _estados.Remove(muerto.Estado);
             }
-            return caidos.Count;
+            foreach (int hechizo in caidos.Select(c => c.HechizoOrigen).Where(h => h != 0).Distinct())
+            {
+                if (!_puestos.Exists(e => e.HechizoOrigen == hechizo)) Desenganchar(hechizo);
+            }
+            return caidos;
         }
 
         /// <summary>
@@ -530,13 +582,59 @@ namespace Jondo.Unity.World.Fights
         }
 
         /// <summary>
-        /// Takes off every row that can be dispelled -- a dispellable of one, the catalogue's
-        /// "dispellable" -- and the states only those rows held. For effect 132.
+        /// The catalogue's "dispellable" of a spell row, which the client receives minus one as its
+        /// EffectDissipationState (Dissipated, DissipatedByDeath, DissipatedByStrongDispel,
+        /// ReallyNotDissipated). A dispel (132) takes the 1s alone; its caster's death takes the 1s
+        /// and the 2s; a 3 waits for a strong dispel, which no effect of the 3.6 catalogue is; a 4
+        /// stays for good. The effects that name a spell or a row -- 406, 1406, 2406 -- take its
+        /// rows whatever their number.
+        /// </summary>
+        /// <remarks>
+        /// A 2 is NOT dispellable, the client's own texts say so. The catalogue writes the Xelor's
+        /// Telefrag (Momificación's 950 of 3622) and the Huppermage's elemental states
+        /// (Lanzallamas' 950 of 290) as 2s, and their class guides say they cannot be removed "mediante
+        /// el desembrujo"; Rayo Alfa, every lasting row of it a 2, says "NO PUEDE DESEMBRUJARSE". The
+        /// Zobal's shields, which his guide calls dispellable, are all 1s.
+        /// </remarks>
+        public const int DispellableByADispel = 1;
+        public const int DispellableByDeath = 2;
+        public const int DispellableByStrongDispelOnly = 3;
+        public const int NeverDispellable = 4;
+
+        /// <summary>Whether a dispel (132) takes this row: a 1, and not one still waiting on its delay.</summary>
+        public static bool TakenByADispel(Buff row) => row.Dispellable == DispellableByADispel && !row.Pendiente;
+
+        /// <summary>
+        /// Whether a row stays when whoever put it dies: a 3 or a 4, and a death takes the rest.
+        /// The Super-güino (2609) a dying ally of Morsagüino Real casts on him is all 3s, his for
+        /// the rest of the fight.
+        /// </summary>
+        public static bool OutlivesItsCaster(Buff row) => row.Dispellable >= DispellableByStrongDispelOnly;
+
+        /// <summary>
+        /// The "dispellable" of the spell row a row was put from, by its spell, grade and effect uid
+        /// (the uids are unique across the whole catalogue), or zero for one of no spell row. Set by
+        /// the server's spell catalogue; <see cref="Poner"/> asks it for every row put without one.
+        /// </summary>
+        public static Func<Buff, int> DispellableOfItsRow { get; set; } = _ => 0;
+
+        /// <summary>
+        /// Whether an armed hook stays when its caster dies: every row it holds is a 3 or a 4, as
+        /// <see cref="OutlivesItsCaster"/> keeps a row. Mizz Frizz's opening spell (3517) puts her
+        /// allies' Invulnerabilidad Glacial (935) and arms on everybody the push hook (793 11943)
+        /// that switches it off, both 3s: kill her first, and the state without its hook would hold
+        /// for good. Set by the server's spell catalogue; a hook of no listed rows goes.
+        /// </summary>
+        public static Func<ActiveSpell, bool> HookOutlivesItsCaster { get; set; } = _ => false;
+
+        /// <summary>
+        /// Takes off every row that can be dispelled (<see cref="TakenByADispel"/>) and the states
+        /// only those rows held. For effect 132.
         /// </summary>
         public List<Buff> QuitarLosDesembrujables()
         {
-            var quitados = _puestos.FindAll(e => e.Dispellable == 1 && !e.Pendiente);
-            _puestos.RemoveAll(e => e.Dispellable == 1 && !e.Pendiente);
+            var quitados = _puestos.FindAll(TakenByADispel);
+            _puestos.RemoveAll(TakenByADispel);
             SeVan(quitados);
             foreach (var quitado in quitados)
             {
@@ -708,6 +806,11 @@ namespace Jondo.Unity.World.Fights
         public Buff Poner(Buff embrujo, Func<int> siguienteNumero)
         {
             Relevados.Clear();
+
+            // Every row of a spell carries its row's "dispellable", whoever made it: twelve of the
+            // engine's fifteen ways of putting a spell's row left it out, and a dispel, which takes
+            // the 1s alone, took almost nothing a spell had put.
+            if (embrujo.Dispellable == 0) embrujo.Dispellable = DispellableOfItsRow(embrujo);
 
             int tope = embrujo.MaxStacks;
             if (embrujo.Apila && tope <= 1) tope = -1;
@@ -942,11 +1045,12 @@ namespace Jondo.Unity.World.Fights
         /// Removes and returns the first pending row whose round has come, in the order they were
         /// put, or null. Like the delayed heals, before the expiry sweep: a pending row's expiry is
         /// its activation round, and the sweep would take it as merely expired. One at a time, so
-        /// that what one of them does can still reach the ones behind it.
+        /// that what one of them does can still reach the ones behind it. <paramref name="atThisTurn"/>,
+        /// when given, says which of the due rows go off at the turn starting now.
         /// </summary>
-        public Buff TakeFirstDuePending(int round)
+        public Buff TakeFirstDuePending(int round, Func<Buff, bool> atThisTurn = null)
         {
-            int i = _puestos.FindIndex(e => e.Pendiente && round >= e.EmpiezaEnRonda);
+            int i = _puestos.FindIndex(e => e.Pendiente && round >= e.EmpiezaEnRonda && (atThisTurn == null || atThisTurn(e)));
             if (i < 0) return null;
             var due = _puestos[i];
             _puestos.RemoveAt(i);

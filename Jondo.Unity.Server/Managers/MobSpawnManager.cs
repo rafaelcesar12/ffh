@@ -3,35 +3,41 @@ using System;
 using System.Collections.Generic;
 using Microsoft.Data.Sqlite;
 using System.Linq;
+using System.Threading.Tasks;
+using Jondo.Unity.Protocol.Game;
+using Jondo.Unity.Server.Network;
 using Jondo.Unity.World.Maps;
+using WrittenGroups = Jondo.Unity.World.Content.ContentStore<Jondo.Unity.World.Content.MobGroupKey,
+                                                             Jondo.Unity.World.Content.MobGroupSpawn>;
 
 namespace Jondo.Unity.Server.Managers
 {
     public static class MobSpawnManager
     {
+        private const string IndoorCombatMapsFile = "monsters/indoor_spawns.json";
+
+        /// <summary>MapInformationFlags.CapabilityAllowMonsterRespawn: monsters stand and come back on the map.</summary>
+        private const int CapabilityAllowMonsterRespawn = 1 << 13;
+
         /// <summary>The banned maps, kept so that the repopulator respects them too.</summary>
         private static HashSet<long> _vetados = new HashSet<long>();
 
         /// <summary>
         /// The maps where a monster is NOT placed, however much the table has them.
         ///
-        /// They are seen while playing: pios inside a house, inside a bank, inside a shop and
-        /// standing on top of the village zaap. Measured over the 38,744 placed groups: 9,331
-        /// —24.1 %— are on an indoor map.
+        /// MapMobs is generated from subarea rosters, so it also seeds houses, banks and shops:
+        /// pios inside a house, a bank or a shop, and on top of the village zaap. The rule:
         ///
-        /// The rule is two lists and one exception, and the exception is the important one:
+        ///   INDOORS         MapPositions.Outdoor = 0
+        ///   EXCEPT          the indoor combat maps of content/monsters/indoor_spawns.json -- mines,
+        ///                   sewers, mazes -- that the client lets monsters respawn on (map flag
+        ///                   0x2000, CapabilityAllowMonsterRespawn)
+        ///   WITH A ZAAP     the travel point catalogue's maps
+        ///   ARENAS          a fight's board
+        ///   EXCEPT DUNGEON  the dungeon rooms, nearly all marked «indoors», keep their monsters
         ///
-        ///   INDOORS         MapPositions.Outdoor = 0, which is 4,165 maps
-        ///   WITH A ZAAP     the 62 of the travel point catalogue; 53 had monsters on top
-        ///   EXCEPT DUNGEON  753 of the 763 dungeon rooms are marked «indoors»
-        ///
-        /// Without that exception, banning indoors WOULD EMPTY THE WHOLE DUNGEONS: they are 2,290
-        /// groups, and a dungeon without creatures is not a dungeon. With it, 7,214 groups are removed
-        /// (18.6 %) spread over 2,393 maps, and the 763 rooms stay as they are.
-        ///
-        /// It is filtered ON LOADING and not by deleting rows from the database on purpose: world.db is regenerated and
-        /// distributed compressed, so a deletion would be lost in the next regeneration and
-        /// one would have to remember to repeat it. With this there is nothing to remember.
+        /// It is filtered ON LOADING and not by deleting rows from the database on purpose: world.db
+        /// is regenerated and distributed compressed, and a deletion would be lost.
         /// </summary>
         private static HashSet<long> MapasSinMonstruos(Microsoft.Data.Sqlite.SqliteConnection connection)
         {
@@ -55,6 +61,36 @@ namespace Jondo.Unity.Server.Managers
             {
                 Program.LogDebug($"[MobSpawnManager] Could not read where monsters do not go: {ex.Message}");
                 return new HashSet<long>();
+            }
+
+            try
+            {
+                string path = Paths.ContentFile(IndoorCombatMapsFile);
+                if (File.Exists(path))
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+                    var combatMaps = doc.RootElement.GetProperty("zones").EnumerateArray()
+                        .SelectMany(zone => zone.GetProperty("maps").EnumerateArray())
+                        .Select(map => map.GetInt64())
+                        .ToArray();
+                    // Only where the client lets monsters respawn: the list cannot override it.
+                    // The first room of Lord Crow's library, where Virgil lets a player in, lacks
+                    // the flag that its fifteen rooms beyond carry.
+                    var respawning = new HashSet<long>();
+                    if (combatMaps.Length > 0)
+                    {
+                        Recoger("SELECT Id FROM MapTemplates WHERE Id IN (" + string.Join(",", combatMaps) + ") " +
+                                $"AND (json_extract(Data, '$.m_flags') & {CapabilityAllowMonsterRespawn}) != 0;",
+                                respawning);
+                    }
+                    foreach (long skipped in combatMaps.Where(m => !respawning.Contains(m)))
+                        Console.WriteLine($"[MobSpawnManager] {IndoorCombatMapsFile}: map {skipped} does not let monsters respawn; left without groups.");
+                    vetados.ExceptWith(respawning);
+                }
+            }
+            catch (Exception ex)
+            {
+                Program.LogDebug($"[MobSpawnManager] Could not read {IndoorCombatMapsFile}: {ex.Message}");
             }
 
             // The zaaps come from the travel point catalogue. The file is read here instead of
@@ -142,6 +178,12 @@ namespace Jondo.Unity.Server.Managers
             /// <summary>Which way it faces, 1 to 7. Generated ones face south-east.</summary>
             public int Orientation { get; set; } = 1;
 
+            /// <summary>
+            /// A character's turn against it, in tenths, when its written group sets one
+            /// (groups.json «playerTurn»); 0 leaves it to the fight's rules.
+            /// </summary>
+            public int PlayerTurn { get; set; }
+
             public List<MobMember> Members { get; set; } = new List<MobMember>();
 
             /// <summary>
@@ -156,6 +198,16 @@ namespace Jondo.Unity.Server.Managers
             /// Blops, five, to a player who comes alone. Zero for any other group.
             /// </summary>
             public int Leaders { get; set; }
+
+            /// <summary>
+            /// Drawn from its subarea on the fly (<see cref="GenerateDynamicMobsForMap"/>,
+            /// <see cref="RespawnOneGroup"/>), not loaded: what a map with nothing to come back to
+            /// stands with.
+            /// </summary>
+            public bool OnTheFly { get; set; }
+
+            /// <summary>Whether this group can walk around its map outside combat.</summary>
+            internal bool CanRoam { get; init; }
         }
 
         private static Dictionary<int, MonsterData> _monsters = new Dictionary<int, MonsterData>();
@@ -260,6 +312,8 @@ namespace Jondo.Unity.Server.Managers
 
             _mapMobs.Clear();
             _fromTable.Clear();
+            _placedByFile.Clear();
+            _erasedByFile.Clear();
 
             // Load MapMobs from SQLite database
             // Who is an archmonster, who is a wanted monster, and where each one belongs. It has to
@@ -305,7 +359,8 @@ namespace Jondo.Unity.Server.Managers
 
                     var group = new MobGroup {
                         MobId = mobId,
-                        CellId = cellId
+                        CellId = cellId,
+                        CanRoam = true
                     };
 
                     try {
@@ -374,7 +429,7 @@ namespace Jondo.Unity.Server.Managers
             int jefes = ComposeDungeonRooms();
 
             // And whatever a person has decided, on top of everything before.
-            var deLaMano = AplicarLosEscritos();
+            var deLaMano = AplicarLosEscritos(LoadWritten(WrittenFile), running: false);
 
             // What every map had once loaded, to put a map back as it was (RestoreMap).
             lock (_candado) _asLoaded = _mapMobs.ToDictionary(kv => kv.Key, kv => kv.Value.Select(CloneOf).ToList());
@@ -586,6 +641,7 @@ namespace Jondo.Unity.Server.Managers
                 Members = members,
                 Modular = true,
                 Leaders = bossRoom && dungeon.BossAlone ? members.Count : 0,
+                // A dungeon room's group waits where the room puts it: it does not roam.
             };
         }
 
@@ -748,22 +804,27 @@ namespace Jondo.Unity.Server.Managers
         /// Each member's level is not written: it comes from the monster and the grade, which is where
         /// it comes from for the base's ones. Storing it would be a second copy of a derived number.
         ///
+        /// <paramref name="running"/> says the world is up (<see cref="ReloadWritten(string)"/>): a
+        /// group taken off then lets its criminal, its unique and its rare monsters go, as a beaten
+        /// one does, and it leaves the groups the world loaded too.
+        ///
         /// Returns the two numbers, for the log.
         /// </remarks>
-        private static (int Puestos, int Quitados) AplicarLosEscritos()
+        private static (int Puestos, int Quitados) AplicarLosEscritos(WrittenGroups escritos, bool running)
         {
             int puestos = 0, quitados = 0;
 
             try
             {
-                var escritos = Jondo.Unity.World.Content.MobGroupContent.Load(
-                    Paths.ContentFile(Jondo.Unity.World.Content.MobGroupContent.AuthoredFile),
-                    Console.WriteLine);
-
                 foreach (var clave in escritos.ErasedKeys)
                 {
-                    if (!_mapMobs.TryGetValue(clave.MapId, out var aqui)) continue;
-                    quitados += aqui.RemoveAll(grupo => grupo.MobId == clave.GroupId);
+                    _mapMobs.TryGetValue(clave.MapId, out var aqui);
+                    SetAside(clave.MapId, clave.GroupId, aqui, running);
+                    if (running && _asLoaded.TryGetValue(clave.MapId, out var cargados))
+                        cargados.RemoveAll(grupo => grupo.MobId == clave.GroupId);
+                    if (aqui == null) continue;
+                    quitados += running ? TakeOff(clave.MapId, aqui, clave.GroupId)
+                                        : aqui.RemoveAll(grupo => grupo.MobId == clave.GroupId);
                 }
 
                 foreach (var escrito in escritos.Values)
@@ -773,6 +834,7 @@ namespace Jondo.Unity.Server.Managers
                         MobId = escrito.GroupId,
                         CellId = escrito.Cell,
                         Orientation = escrito.Orientation,
+                        PlayerTurn = escrito.PlayerTurn,
                     };
 
                     foreach (var miembro in escrito.Members)
@@ -810,8 +872,11 @@ namespace Jondo.Unity.Server.Managers
                     // One written for a banned map is placed all the same, and on purpose: the ban is a
                     // rule about what Ankama placed on its own, not about what someone places
                     // here knowingly.
-                    aqui.RemoveAll(otro => otro.MobId == escrito.GroupId);
+                    SetAside(escrito.MapId, escrito.GroupId, aqui, running);
+                    if (running) TakeOff(escrito.MapId, aqui, escrito.GroupId);
+                    else aqui.RemoveAll(otro => otro.MobId == escrito.GroupId);
                     aqui.Add(grupo);
+                    _placedByFile.Add((escrito.MapId, escrito.GroupId));
                     puestos++;
                 }
             }
@@ -823,6 +888,33 @@ namespace Jondo.Unity.Server.Managers
             return (puestos, quitados);
         }
 
+        /// <summary>The written groups of a file; none when it cannot be read.</summary>
+        private static WrittenGroups LoadWritten(string path)
+        {
+            try
+            {
+                return Jondo.Unity.World.Content.MobGroupContent.Load(path, Console.WriteLine);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[MobSpawnManager] The written groups could not be read: {ex.Message}");
+                return new WrittenGroups();
+            }
+        }
+
+        /// <summary>
+        /// Keeps, the first time the file takes it off, the world's group it erases or writes over, as
+        /// a start loads it: at the start the map's own; with the world running the copy the world
+        /// loaded -- the one on the map may carry a criminal or a unique that is not its own.
+        /// </summary>
+        private static void SetAside(long mapId, long groupId, List<MobGroup>? here, bool running)
+        {
+            if (_erasedByFile.ContainsKey((mapId, groupId))) return;
+            var from = running ? (_asLoaded.TryGetValue(mapId, out var loaded) ? loaded : null) : here;
+            var original = from?.FirstOrDefault(g => g.MobId == groupId);
+            if (original != null) _erasedByFile[(mapId, groupId)] = CloneOf(original);
+        }
+
         private static Random _rand = new Random();
 
         /// <summary>
@@ -832,7 +924,7 @@ namespace Jondo.Unity.Server.Managers
         /// lock: the jpv of a map load, the jss of an entry, the group lookup on
         /// attacking. Meanwhile, another player winning his fight on that same map did a
         /// RemoveAll and an Add on that same list, and the first one's foreach died with a
-        /// «Collection was modified» that MapLoadHandler's try/catch swallows without a word:
+        /// «Collection was modified» that the retired map loader's try/catch swallowed without a word:
         /// the jpv did not go out, and the player entered an empty map —without his character, without NPCs and without
         /// monsters— with no error anywhere.
         ///
@@ -925,7 +1017,9 @@ namespace Jondo.Unity.Server.Managers
             var group = new MobGroup
             {
                 MobId = ActorIds.NuevoMonstruo(),
-                CellId = cellId
+                CellId = cellId,
+                OnTheFly = true,
+                CanRoam = true,
             };
 
             int groupSize = _rand.Next(1, 9); // 1 to 8 monsters, just like in Dofus
@@ -1093,6 +1187,111 @@ namespace Jondo.Unity.Server.Managers
             }
         }
 
+        /// <summary>The groups content/monsters/groups.json placed, by map.</summary>
+        private static HashSet<(long Map, long Group)> _placedByFile = new();
+
+        /// <summary>
+        /// The world's groups the file erases or writes over, each as a start loads it: what stands
+        /// again on its map the day the file no longer does (<see cref="ReloadWritten(string)"/>).
+        /// </summary>
+        private static readonly Dictionary<(long Map, long Group), MobGroup> _erasedByFile = new();
+
+        /// <summary>
+        /// content/monsters/groups.json read again with the server running (the content reload):
+        /// the groups the file placed before are taken off their maps, the file's groups are put
+        /// back as it now writes them -- and recorded as their maps' loaded groups, so a beaten one
+        /// comes back as written --, a group of the world it now erases goes, and one it no longer
+        /// erases stands again. A group taken off lets its criminal, its unique and its rare monsters
+        /// go, as a beaten one does. A map filled on the fly for having nothing to come back to
+        /// loses that fill once it has something; the maps' other groups stay as they are. Each map
+        /// ends as a restart would leave it; a client sees the change on entering the map again.
+        /// </summary>
+        /// <remarks>
+        /// The file used to be read at the start only, so a group written for a quest stood
+        /// nowhere until the server was restarted.
+        /// </remarks>
+        public static (int Placed, int Removed) ReloadWritten() => ReloadWritten(WrittenFile);
+
+        /// <summary>The file the written groups are read from: content/monsters/groups.json.</summary>
+        private static string WrittenFile
+            => Paths.ContentFile(Jondo.Unity.World.Content.MobGroupContent.AuthoredFile);
+
+        /// <summary><see cref="ReloadWritten()"/> from another file: the tests' own.</summary>
+        internal static (int Placed, int Removed) ReloadWritten(string path)
+        {
+            lock (_candado)
+            {
+                var escritos = LoadWritten(path);
+                var erasedNow = escritos.ErasedKeys.Select(k => (k.MapId, k.GroupId)).ToHashSet();
+                var writtenNow = escritos.Values.Select(g => (g.MapId, g.GroupId)).ToHashSet();
+
+                // The maps that had groups to come back to. The others were filled on the fly,
+                // which is for a map with nothing loaded (GetMobsForMap).
+                var hadLoaded = _asLoaded.Where(kv => kv.Value.Count > 0).Select(kv => kv.Key).ToHashSet();
+
+                foreach (var (map, id) in _placedByFile)
+                {
+                    if (_mapMobs.TryGetValue(map, out var here)) TakeOff(map, here, id);
+                    if (_asLoaded.TryGetValue(map, out var loaded)) loaded.RemoveAll(g => g.MobId == id);
+                }
+                _placedByFile = new HashSet<(long Map, long Group)>();
+
+                // The groups of the world the file no longer erases nor writes over, back as a
+                // start loads them.
+                var restored = new List<(long Map, long Group)>();
+                foreach (var (key, original) in _erasedByFile.ToList())
+                {
+                    if (erasedNow.Contains(key) || writtenNow.Contains(key)) continue;
+                    _erasedByFile.Remove(key);
+                    if (!_mapMobs.TryGetValue(key.Map, out var here)) _mapMobs[key.Map] = here = new List<MobGroup>();
+                    TakeOff(key.Map, here, key.Group);
+                    here.Add(CloneOf(original));
+                    var loaded = LoadedOf(key.Map);
+                    loaded.RemoveAll(g => g.MobId == key.Group);
+                    loaded.Add(CloneOf(original));
+                    restored.Add(key);
+                }
+
+                var result = AplicarLosEscritos(escritos, running: true);
+
+                foreach (var (map, id) in _placedByFile)
+                {
+                    var group = _mapMobs[map].First(g => g.MobId == id);
+                    var loaded = LoadedOf(map);
+                    loaded.RemoveAll(g => g.MobId == id);
+                    loaded.Add(CloneOf(group));
+                }
+
+                // A group erased since the start never stood on a cell the start checked
+                // (PlaceOnWalkableCells): it stands where a restart would put it.
+                if (_spreadDone)
+                {
+                    foreach (long map in restored.Select(k => k.Map).Distinct())
+                        if (_mapMobs.TryGetValue(map, out var groups)) Spread(map, groups);
+                }
+
+                // A map filled on the fly that has groups to come back to now: a restart would
+                // never have drawn its fill.
+                foreach (long map in _placedByFile.Select(k => k.Map).Concat(restored.Select(k => k.Map)).Distinct())
+                {
+                    if (hadLoaded.Contains(map) || !_mapMobs.TryGetValue(map, out var here)) continue;
+                    foreach (var drawn in here.Where(g => g.OnTheFly).ToList()) TakeOff(map, here, drawn.MobId);
+                }
+
+                if (_placedByFile.Count > 0) ActorIds.ReservarMonstruosHasta(_placedByFile.Min(k => k.Group));
+                Console.WriteLine($"[MobSpawnManager] Written groups read again: {result.Puestos} placed, " +
+                                  $"{result.Quitados} erased, {restored.Count} put back.");
+                return result;
+            }
+        }
+
+        /// <summary>The groups a map had when the world was loaded, an empty list kept for it if none.</summary>
+        private static List<MobGroup> LoadedOf(long mapId)
+        {
+            if (!_asLoaded.TryGetValue(mapId, out var loaded)) _asLoaded[mapId] = loaded = new List<MobGroup>();
+            return loaded;
+        }
+
         /// <summary>Ids of groups written by hand run from -2000000 down (see groups.json).</summary>
         private const long WrittenGroupIds = -2000000;
 
@@ -1104,8 +1303,11 @@ namespace Jondo.Unity.Server.Managers
             MobId = group.MobId,
             CellId = group.CellId,
             Orientation = group.Orientation,
+            PlayerTurn = group.PlayerTurn,
             Modular = group.Modular,
             Leaders = group.Leaders,
+            OnTheFly = group.OnTheFly,
+            CanRoam = group.CanRoam,
             Members = group.Members.Select(m => new MobMember { Monster = m.Monster, GradeIndex = m.GradeIndex, Level = m.Level }).ToList(),
         };
 
@@ -1397,47 +1599,133 @@ namespace Jondo.Unity.Server.Managers
             int moved = 0;
             lock (_candado)
             {
-                foreach (var (mapId, groups) in _mapMobs)
-                {
-                    if (!MapManager.WalkableCells.TryGetValue(mapId, out var walkable) || walkable.Count == 0) continue;
-                    var standable = new HashSet<int>(walkable);
-                    foreach (var element in Interactives.ElementsOf(mapId)) if (element.Cell != 0) standable.Remove(element.Cell);
-                    var npcs = Npcs.CellsOn(mapId);
-                    bool Misplaced(MobGroup g) => _fromTable.Contains(g.MobId) && !_spread.Contains(g.MobId)
-                        && (!standable.Contains(g.CellId) || FallbackCells.Contains(g.CellId)
-                            || npcs.Any(n => MapGeometry.Distance(g.CellId, n) <= NpcClearance));
-                    var used = new HashSet<int>(groups.Where(g => !Misplaced(g)).Select(g => g.CellId));
-                    List<int>? cells = null;
-                    bool movedHere = false;
-                    foreach (var group in groups)
-                    {
-                        if (!Misplaced(group)) continue;
-                        cells ??= GetGroupCells(mapId);
-                        var choices = cells.Where(c => !used.Contains(c) && !FallbackCells.Contains(c)).ToList();
-                        if (choices.Count == 0) choices = cells.Where(c => !used.Contains(c)).ToList();
-                        if (choices.Count == 0) { used.Add(group.CellId); continue; }
-                        var draw = new Random(unchecked((int)(group.MobId ^ mapId)));
-                        for (int i = choices.Count - 1; i > 0; i--)
-                        {
-                            int j = draw.Next(i + 1);
-                            (choices[i], choices[j]) = (choices[j], choices[i]);
-                        }
-                        int cell = choices.FirstOrDefault(c => used.All(u => MapGeometry.Distance(c, u) >= GroupSpacing), choices[0]);
-                        used.Add(cell);
-                        _spread.Add(group.MobId);
-                        if (cell == group.CellId) continue;
-                        group.CellId = cell;
-                        moved++;
-                        movedHere = true;
-                    }
-                    // RestoreMap puts a map back as it was loaded: as it now stands.
-                    if (movedHere && _asLoaded.TryGetValue(mapId, out var loaded))
-                        foreach (var copy in loaded)
-                            if (groups.FirstOrDefault(g => g.MobId == copy.MobId) is { } now) copy.CellId = now.CellId;
-                }
+                foreach (var (mapId, groups) in _mapMobs) moved += Spread(mapId, groups);
+                _spreadDone = true;
             }
             Console.WriteLine($"[MobSpawnManager] {moved} group(s) of MapMobs moved off cells nobody can stand on.");
             return moved;
+        }
+
+        /// <summary>Whether <see cref="PlaceOnWalkableCells"/> has run: a group put back later goes through it too.</summary>
+        private static bool _spreadDone;
+
+        /// <summary>One map's part of <see cref="PlaceOnWalkableCells"/>, under the lock: how many of its groups moved.</summary>
+        private static int Spread(long mapId, List<MobGroup> groups)
+        {
+            if (!MapManager.WalkableCells.TryGetValue(mapId, out var walkable) || walkable.Count == 0) return 0;
+            var standable = new HashSet<int>(walkable);
+            foreach (var element in Interactives.ElementsOf(mapId)) if (element.Cell != 0) standable.Remove(element.Cell);
+            var npcs = Npcs.CellsOn(mapId);
+            bool Misplaced(MobGroup g) => _fromTable.Contains(g.MobId) && !_spread.Contains(g.MobId)
+                && (!standable.Contains(g.CellId) || FallbackCells.Contains(g.CellId)
+                    || npcs.Any(n => MapGeometry.Distance(g.CellId, n) <= NpcClearance));
+            var used = new HashSet<int>(groups.Where(g => !Misplaced(g)).Select(g => g.CellId));
+            List<int>? cells = null;
+            int moved = 0;
+            foreach (var group in groups)
+            {
+                if (!Misplaced(group)) continue;
+                cells ??= GetGroupCells(mapId);
+                var choices = cells.Where(c => !used.Contains(c) && !FallbackCells.Contains(c)).ToList();
+                if (choices.Count == 0) choices = cells.Where(c => !used.Contains(c)).ToList();
+                if (choices.Count == 0) { used.Add(group.CellId); continue; }
+                var draw = new Random(unchecked((int)(group.MobId ^ mapId)));
+                for (int i = choices.Count - 1; i > 0; i--)
+                {
+                    int j = draw.Next(i + 1);
+                    (choices[i], choices[j]) = (choices[j], choices[i]);
+                }
+                int cell = choices.FirstOrDefault(c => used.All(u => MapGeometry.Distance(c, u) >= GroupSpacing), choices[0]);
+                used.Add(cell);
+                _spread.Add(group.MobId);
+                if (cell == group.CellId) continue;
+                group.CellId = cell;
+                moved++;
+            }
+            // RestoreMap puts a map back as it was loaded: as it now stands.
+            if (moved > 0 && _asLoaded.TryGetValue(mapId, out var loaded))
+                foreach (var copy in loaded)
+                    if (groups.FirstOrDefault(g => g.MobId == copy.MobId) is { } now) copy.CellId = now.CellId;
+            return moved;
+        }
+
+        internal static async Task RoamAsync()
+        {
+            var occupiedMaps = SessionRegistry.InWorld()
+                .Where(SessionRegistry.StandsOnTheMap)
+                .GroupBy(session => session.MapId);
+            foreach (var map in occupiedMaps)
+            {
+                var audience = map.First().Map;
+                if (audience.MapId != map.Key) continue;
+
+                var occupied = map.Where(session => session.MapId == map.Key)
+                    .Select(session => session.State.CellId).ToHashSet();
+                if (occupied.Count == 0) continue;
+                foreach (var movement in WalkGroups(map.Key, occupied))
+                    await audience.SendAsync(
+                        new GameMapMovementEvent(movement.Cells, movement.ActorId, false),
+                        fightId: 0);
+            }
+        }
+
+        private static List<(long ActorId, List<int> Cells)> WalkGroups(long mapId, HashSet<int> occupied)
+        {
+            var movements = new List<(long ActorId, List<int> Cells)>();
+            // Apply the same movement rules to groups on indoor and outdoor maps.
+            lock (_candado)
+            {
+                if (!_mapMobs.TryGetValue(mapId, out var groups)) return movements;
+                var candidates = groups.Where(g => g.CanRoam && g.Members.Count > 0 &&
+                    !Handlers.FightHandler.IsGroupFighting(g.MobId) && Random.Shared.Next(3) == 0).ToList();
+                if (candidates.Count == 0) return movements;
+
+                if (!MapManager.WalkableCells.TryGetValue(mapId, out var walkable) ||
+                    walkable.Count == 0) return movements;
+
+                // Spawn cells need room on all sides. A walk can use a narrow passage, but it
+                // ends where a group may stand (GetGroupCells): off the borders, where it would
+                // hide the map's exits, and clear of the NPCs.
+                var npcs = Npcs.CellsOn(mapId);
+                var spots = GetGroupCells(mapId).ToHashSet();
+                var allowed = walkable.ToHashSet();
+                allowed.ExceptWith(npcs);
+                allowed.ExceptWith(Interactives.ElementsOf(mapId).Where(e => e.Cell != 0).Select(e => e.Cell));
+                allowed.ExceptWith(occupied);
+                allowed.ExceptWith(groups.Select(g => g.CellId));
+
+                foreach (var group in candidates)
+                {
+                    int preferredLength = Random.Shared.Next(2, 6);
+                    var nearby = allowed.Where(cell => MapGeometry.Distance(group.CellId, cell) <= 5).ToHashSet();
+                    var destinations = nearby
+                        .Select(cell => (Cell: cell, Distance: MapGeometry.Distance(group.CellId, cell)))
+                        .Where(target => target.Distance >= 2 && spots.Contains(target.Cell))
+                        .OrderBy(target => Math.Abs(target.Distance - preferredLength))
+                        .ThenBy(_ => Random.Shared.Next());
+
+                    var cells = destinations
+                        .Select(target => MapGeometry.FindShortestPath(group.CellId, target.Cell, nearby))
+                        .FirstOrDefault(path => path.Count is >= 3 and <= 6);
+                    if (cells == null) continue;
+
+                    // Groups can animate at the same time, so reserve the full path for this tick.
+                    allowed.ExceptWith(cells);
+                    var (x, y) = MapGeometry.CellToPoint(cells[^2]);
+                    var (lastX, lastY) = MapGeometry.CellToPoint(cells[^1]);
+                    group.Orientation = (lastX - x, lastY - y) switch
+                    {
+                        (1, 0) => 1,
+                        (0, -1) => 3,
+                        (-1, 0) => 5,
+                        _ => 7
+                    };
+                    group.CellId = cells[^1];
+                    movements.Add((group.MobId, cells));
+                }
+            }
+
+            return movements;
         }
 
         public static List<int> GetInnerWalkableCells(long mapId)
@@ -1564,6 +1852,13 @@ namespace Jondo.Unity.Server.Managers
             }
         }
 
+        /// <summary>A group off its map the way a beaten one goes (<see cref="ReleaseRareMonsters"/>); how many went.</summary>
+        private static int TakeOff(long mapId, List<MobGroup> mobs, long mobId)
+        {
+            ReleaseRareMonsters(mapId, mobs, mobId);
+            return mobs.RemoveAll(m => m.MobId == mobId);
+        }
+
         /// <summary>
         /// A group that leaves its map lets its archmonster and its wanted monster go, so the zone
         /// can have them again somewhere else (<see cref="Archimonsters.MayComeBack"/>,
@@ -1667,6 +1962,9 @@ namespace Jondo.Unity.Server.Managers
         /// </remarks>
         private static int PlaceUniques()
         {
+            // Two roaming monsters may share a group. Each needs its own slot.
+            static bool IsOrdinary(MobMember member) => !UniqueMonsters.Is(member.Monster?.Id ?? 0);
+
             var due = UniqueMonsters.Due((monster, map, group) =>
                 _mapMobs.TryGetValue(map, out var groups)
                 && groups.Any(g => g.MobId == group && g.Members.Any(m => m.Monster?.Id == monster)));
@@ -1681,7 +1979,8 @@ namespace Jondo.Unity.Server.Managers
                 {
                     if (!_mapMobs.TryGetValue(mapId, out var groups)) continue;
                     foreach (var group in groups)
-                        if (group.Members.Count > 0 && !group.Modular && !Handlers.FightHandler.IsGroupFighting(group.MobId))
+                        if (!group.Modular && !Handlers.FightHandler.IsGroupFighting(group.MobId)
+                            && group.Members.Any(IsOrdinary))
                             candidates.Add((mapId, group));
                 }
                 if (candidates.Count == 0) continue;
@@ -1691,7 +1990,13 @@ namespace Jondo.Unity.Server.Managers
                 // A new list, as for the criminals: the groups are read outside the lock.
                 var members = new List<MobMember>(chosen.Members);
                 int slot = members.FindIndex(m => m.Monster?.Id == unique.Ordinary);
-                if (slot < 0) slot = _rand.Next(members.Count);
+                if (slot < 0)
+                {
+                    var ordinarySlots = Enumerable.Range(0, members.Count)
+                        .Where(index => IsOrdinary(members[index]))
+                        .ToArray();
+                    slot = ordinarySlots[_rand.Next(ordinarySlots.Length)];
+                }
                 members[slot] = new MobMember
                 {
                     Monster = data,
@@ -1745,4 +2050,3 @@ namespace Jondo.Unity.Server.Managers
         }
     }
 }
-

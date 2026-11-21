@@ -52,7 +52,7 @@ public sealed class GuildRankFlowTests : IDisposable
             () => InventoryMessages.FromCatalogue.Snapshot(session.State), () => new([]), () => new(81_001),
             () => EntryInformationMessages.PreviousConnection(session.State.PreviousVisit),
             new(_ => 0, _ => [], _ => 0, ItemEffectMessages.FromCatalogue),
-            new(() => new(0), () => new(null), () => new(null), () => new("", null)));
+            new(() => new(0), () => new(null), () => new(null), () => new(null), () => new("", null)));
         using var wrongContext = SessionContext.Push(GameSession.SinSocket());
         using var turn = await session.EnterTurnAsync();
         await initial.SendAsync(session);
@@ -127,9 +127,12 @@ public sealed class GuildRankFlowTests : IDisposable
             Assert.Equal(ConnectionProtocol.Push(Op.Jgw, GuildProtocol.BuildGuildJoined(guild, GuildStore.RankNewcomer)), memberPackets[2]);
             Assert.DoesNotContain(leaderPackets, IsRanks);
             Assert.Single(memberPackets, IsRanks);
-            Assert.IsType<GuildGeneralInformationEvent>(Assert.Single(leaderCodec.Encoded).Content);
+            Assert.Collection(leaderCodec.Encoded,
+                frame => Assert.IsType<GuildMembersEvent>(frame.Content),
+                frame => Assert.IsType<GuildGeneralInformationEvent>(frame.Content));
             Assert.Collection(memberCodec.Encoded,
                 frame => Assert.IsType<GuildRanksEvent>(frame.Content),
+                frame => Assert.IsType<GuildMembersEvent>(frame.Content),
                 frame => Assert.IsType<GuildGeneralInformationEvent>(frame.Content));
             Assert.Equal(guild.Id, GuildStore.GuildOf(Member)!.Id);
         }

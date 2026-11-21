@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -222,17 +223,49 @@ namespace JondoFix
                     case "pick":
                     {
                         string rest = request.Line.TrimStart().Length > verb.Length ? request.Line.TrimStart().Substring(verb.Length).Trim() : "";
+                        // «find -a query»: the hidden elements too.
+                        bool all = verb == "find" && rest.StartsWith("-a ", StringComparison.Ordinal);
+                        if (all) rest = rest.Substring(3).Trim();
                         Then(() =>
                         {
                             try
                             {
                                 request.Reply = "ok " + (verb == "ui" ? Interface.Texts(rest)
-                                                       : verb == "find" ? Interface.Find(rest)
+                                                       : verb == "find" ? Interface.Find(rest, all)
                                                        : Interface.Pick(Int(1), Int(2)));
                             }
                             catch (Exception ex) { request.Reply = "error: " + ex.Message; }
                             request.Done.Set();
                         });
+                        return;
+                    }
+                    case "settext":
+                    case "settext!":
+                    {
+                        // «settext name text...»: the text may hold spaces, the name may not.
+                        // «settext!» validates the field afterwards, as Enter would.
+                        string rest = request.Line.TrimStart().Substring(verb.Length).TrimStart();
+                        int space = rest.IndexOf(' ');
+                        string name = space < 0 ? rest : rest.Substring(0, space);
+                        string text = space < 0 ? "" : rest.Substring(space + 1);
+                        bool submit = verb == "settext!";
+                        Then(() =>
+                        {
+                            try { request.Reply = "ok " + Interface.SetText(name, text, submit); }
+                            catch (Exception ex) { request.Reply = "error: " + ex.Message; }
+                            request.Done.Set();
+                        }, 2);
+                        return;
+                    }
+                    case "shot":
+                    {
+                        // After whatever was asked before it has been played, at the end of a frame:
+                        // a picture of the window as JPEG, no wider than asked (1600 by default) --
+                        // or of a part of it («shot widest x y w h»), brought to that width, larger too.
+                        int widest = Int(1, 1600);
+                        var region = words.Length >= 6 ? new RectInt(Int(2), Int(3), Int(4), Int(5)) : (RectInt?)null;
+                        string path = Path.Combine(Path.GetTempPath(), $"jondo-shot-{_port}.jpg");
+                        Then(() => MelonCoroutines.Start(Shot(request, path, widest, region)));
                         return;
                     }
                     case "move":
@@ -312,6 +345,68 @@ namespace JondoFix
             catch (Exception ex)
             {
                 request.Reply = "error: " + ex.Message;
+                request.Done.Set();
+            }
+        }
+
+        /// <summary>
+        /// The window as the person sees it, written to <paramref name="path"/>: read once the frame
+        /// has been drawn, scaled down to <paramref name="widest"/> pixels across, and answered with
+        /// the picture's size and the window's, to turn a point on it into one to click. With a
+        /// <paramref name="region"/> (window pixels, top left), only that part, brought to
+        /// <paramref name="widest"/> across even when larger -- a zoom --, and its corner answered too.
+        /// </summary>
+        private static IEnumerator Shot(Request request, string path, int widest, RectInt? region = null)
+        {
+            yield return new WaitForEndOfFrame();
+            Texture2D full = null, small = null, part = null;
+            RenderTexture scaled = null;
+            try
+            {
+                full = ScreenCapture.CaptureScreenshotAsTexture();
+                var picture = full;
+                int rx = 0, ry = 0;
+                if (region is RectInt wanted)
+                {
+                    rx = Math.Clamp(wanted.x, 0, full.width - 1);
+                    ry = Math.Clamp(wanted.y, 0, full.height - 1);
+                    int w = Math.Clamp(wanted.width, 1, full.width - rx), h = Math.Clamp(wanted.height, 1, full.height - ry);
+                    // The texture's rows run from the bottom.
+                    part = new Texture2D(w, h, TextureFormat.RGB24, false);
+                    part.SetPixels(full.GetPixels(rx, full.height - ry - h, w, h));
+                    part.Apply();
+                    picture = part;
+                }
+                bool zoom = region != null && widest > 0 && picture.width != widest;
+                if (zoom || widest > 0 && picture.width > widest)
+                {
+                    int width = widest, height = Math.Max(1, picture.height * widest / picture.width);
+                    scaled = RenderTexture.GetTemporary(width, height);
+                    Graphics.Blit(picture, scaled);
+                    var previous = RenderTexture.active;
+                    RenderTexture.active = scaled;
+                    small = new Texture2D(width, height, TextureFormat.RGB24, false);
+                    small.ReadPixels(new Rect(0, 0, width, height), 0, 0);
+                    small.Apply();
+                    RenderTexture.active = previous;
+                    picture = small;
+                }
+                byte[] jpeg = ImageConversion.EncodeToJPG(picture, 85);
+                File.WriteAllBytes(path, jpeg);
+                int sourceWidth = region != null ? part.width : Screen.width, sourceHeight = region != null ? part.height : Screen.height;
+                request.Reply = $"ok {path} {picture.width} {picture.height} {sourceWidth} {sourceHeight}"
+                                + (region != null ? $" {rx} {ry}" : "");
+            }
+            catch (Exception ex)
+            {
+                request.Reply = "error: " + ex.Message;
+            }
+            finally
+            {
+                if (scaled != null) RenderTexture.ReleaseTemporary(scaled);
+                if (full != null) UnityEngine.Object.Destroy(full);
+                if (small != null) UnityEngine.Object.Destroy(small);
+                if (part != null) UnityEngine.Object.Destroy(part);
                 request.Done.Set();
             }
         }

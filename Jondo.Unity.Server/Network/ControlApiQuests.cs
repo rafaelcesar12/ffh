@@ -141,8 +141,8 @@ namespace Jondo.Unity.Server.Network
             }
             long action = Numero(cuerpo, "action");
             if (action == 0) action = Npcs.Talk;
-            var lines = RunInSession(session, stream => NpcHandler.InteractAsync(stream,
-                ClientFrame(Op.Iov, Pb.New().Var(1, action).Var(2, map).Var(3, actor).Build())));
+            var lines = RunInSession(session, _ => NpcHandler.InteractAsync(session,
+                new(checked((int)action), map, checked((int)actor))));
             return Bien(DialogueNow(session, lines));
         }
 
@@ -152,8 +152,8 @@ namespace Jondo.Unity.Server.Network
             var session = TestSessionOnline();
             if (session == null) return Mal(404, "offline");
             long reply = Numero(cuerpo, "reply");
-            var lines = RunInSession(session, stream => NpcHandler.ReplyAsync(stream,
-                ClientFrame(Op.Ioy, Pb.New().Var(1, reply).Build())));
+            var lines = RunInSession(session, _ => NpcHandler.ReplyAsync(session,
+                new(checked((int)reply))));
             return Bien(DialogueNow(session, lines));
         }
 
@@ -164,9 +164,9 @@ namespace Jondo.Unity.Server.Network
             if (session == null) return Mal(404, "offline");
             // The X closes whatever is open, as the client's kla does (GameNodeProxy): a workshop too,
             // whose closing is what marks a quest's «Fabricar … y cerrar la interfaz».
-            var lines = RunInSession(session, stream => WorkshopHandler.IsOpen
+            var lines = RunInSession(session, _ => WorkshopHandler.IsOpen
                 ? WorkshopHandler.CloseAsync(session)
-                : NpcHandler.CloseAsync(stream));
+                : NpcHandler.CloseAsync(session));
             return Bien(DialogueNow(session, lines));
         }
 
@@ -184,7 +184,7 @@ namespace Jondo.Unity.Server.Network
             {
                 uid = Managers.Equipment.All.FirstOrDefault(i => i.Template == template && i.Quantity > 0)?.Uid ?? 0;
                 if (uid != 0)
-                    await ItemUseHandler.UseAsync(stream, ClientFrame(Op.Iuu, Pb.New().Var(3, uid).Build()));
+                    await ItemUseHandler.UseAsync(session, ClientFrame(Op.Iuu, Pb.New().Var(3, uid).Build()));
             });
             if (uid == 0) return Mal(404, $"item {template} not carried");
             return Bien(new { item = template, uid, lines = lines.Select(l => l.Length > 220 ? l[..220] : l).ToList() });
@@ -243,9 +243,9 @@ namespace Jondo.Unity.Server.Network
             if (skill == 0)
                 skill = InteractiveRegistry.OnMap(map).FirstOrDefault(i => i.Element.Id == element)?.Actions.FirstOrDefault()?.SkillInstanceId ?? 0;
             // A quest's element travels in the character's own jss, not in the registry
-            // (ConnectionProtocol.AddQuestElements), with the instance every element has.
+            // (MapInteractiveMessages.Snapshot), with the instance every element has.
             if (skill == 0) skill = Interactives.SkillInstanceOf(element);
-            var lines = RunInSession(session, stream => InteractiveActionHandler.UseAsync(stream,
+            var lines = RunInSession(session, _ => InteractiveActionHandler.UseAsync(session,
                 ClientFrame(Op.Iwo, Pb.New().Var(1, skill).Var(2, element).Build())));
             return Bien(new { element, skill, dialogue = DialogueNow(session), lines = lines.Select(l => l.Length > 220 ? l[..220] : l).ToList() });
         }
@@ -304,45 +304,14 @@ namespace Jondo.Unity.Server.Network
         /// <summary>
         /// The authored content of the quests read again with the server running: the NPCs'
         /// placements and conversations, the objectives' bindings and criteria, the fights replies
-        /// start, the gathering and fight drops, the hand-written loot groups, the readable signs and the passages. The
+        /// start, the gathering and fight drops, the hand-written loot groups and monster groups, the readable signs and the passages. The
         /// clients stay connected; what a map
         /// shows changes on entering it again.
         /// </summary>
         private static Respuesta TestReload()
         {
-            var watch = System.Diagnostics.Stopwatch.StartNew();
-            Managers.NpcDialogues.Reload();
-            Managers.Npcs.Initialize();
-            Managers.DungeonDoor.Initialize();
-            Managers.Bankers.Initialize();
-            Managers.Quests.ReloadContent();
-            Managers.NpcFights.Forget();
-            Handlers.NpcBarterHandler.Forget();
-            Managers.MapStagings.Forget();
-            Managers.PlateGates.Forget();
-            Managers.DimensionDungeons.Forget();
-            Managers.ClosedBorders.Forget();
-            Managers.MeasuredArrivals.Forget();
-            Managers.HarvestDrops.Forget();
-            Managers.QuestFightDrops.Forget();
-            Managers.LootBoxes.Forget();
-            Managers.LegendaryHunts.ForgetCompany();
-            Managers.TokenShops.Initialize();
-            Managers.NpcShops.Initialize();
-            Managers.DungeonExitRooms.Forget();
-            Managers.FightWinAlterations.Forget();
-            Managers.MonsterSummonCaps.Reload();
-            Managers.Readables.Forget();
-            Managers.InteractiveWays.Forget();
-            Managers.TeleportManager.Initialize();
-            // The stations written by hand in content/interactives/workshops.json, before the registry
-            // that declares them is built again.
-            Managers.Workshops.Initialize();
-            // The passages are declared to the client from here: a door written since the start was
-            // reloaded above and still answered «Unknown use» until this was built again.
-            Managers.InteractiveRegistry.Initialize();
-            Console.WriteLine($"[Content] Reloaded in {watch.ElapsedMilliseconds} ms.");
-            return Bien(new { reloaded = true, ms = watch.ElapsedMilliseconds });
+            long ms = Managers.ContentReload.Run();
+            return Bien(new { reloaded = true, ms });
         }
 
         /// <summary>The character's quests: those in hand with their step and objectives, and those finished.</summary>
@@ -399,51 +368,25 @@ namespace Jondo.Unity.Server.Network
             switch (op)
             {
                 case "start":
-                    lines = RunInSession(session, stream => Quests.StartAsync(stream, quest));
+                    lines = RunInSession(session, _ => Quests.StartAsync(session, quest));
                     break;
                 case "finish":
-                    lines = RunInSession(session, async stream =>
-                    {
-                        if (!log.Active(quest) && !log.Finished(quest)) await Quests.StartAsync(stream, quest);
-                        bool wasActive = log.Active(quest);
-                        for (int guard = 0; guard < 40 && log.Active(quest); guard++) log.FinishStep(quest);
-                        Quests.SaveAsItStands(quest);
-                        if (wasActive) await DropFromTheBoxAsync(stream, quest);
-                        await Quests.SendJournalAsync(stream);
-                    });
+                    lines = RunInSession(session, stream => QuestAdmin.FinishAsync(stream, quest));
                     break;
                 case "forget":
-                    lines = RunInSession(session, async stream =>
-                    {
-                        if (log.Active(quest)) await DropFromTheBoxAsync(stream, quest);
-                        Quests.Forget(quest);
-                        await Quests.SendJournalAsync(stream);
-                    });
+                    lines = RunInSession(session, stream => QuestAdmin.ForgetAsync(stream, quest));
                     break;
                 case "tick":
                     // One objective of the step in hand marked done, to try a later one again
                     // without replaying what comes before it.
                     int objective = (int)Numero(cuerpo, "objective");
-                    lines = RunInSession(session, stream => Quests.TickAsync(stream, quest, objective));
+                    lines = RunInSession(session, _ => Quests.TickAsync(session, quest, objective));
                     break;
                 default:
                     return Mal(400, "op: start, finish, forget or tick");
             }
             var run = log.Run(quest);
             return Bien(new { quest, op, run = run == null ? null : RunOf(log, run), lines = lines.Where(l => l.Contains("[Quest")).ToList() });
-        }
-
-        /// <summary>
-        /// A quest under way that the scene set closes or wipes out of turn leaves the client's
-        /// followed box as a quest ends: the client follows every quest it starts, and only the
-        /// ied of a quest done takes it out again. Without it a quest wiped out while under way
-        /// stayed in the box, asking for objectives the server no longer had.
-        /// </summary>
-        private static async System.Threading.Tasks.Task DropFromTheBoxAsync(System.Net.Sockets.NetworkStream stream, int quest)
-        {
-            await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                ConnectionProtocol.Push("ied", QuestProtocol.BuildQuestValidated(quest)));
-            FollowedQuests.Unfollow(SessionContext.State.CharacterId, quest);
         }
     }
 }

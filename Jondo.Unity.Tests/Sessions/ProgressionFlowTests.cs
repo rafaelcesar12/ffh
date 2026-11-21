@@ -159,7 +159,7 @@ namespace Jondo.Unity.Tests.Sessions
 
                     // Pandala route capture, frames 2643-2646: mga -1 then kub, kuf {545}, mfs.
                     // The base 520 with the character's 5 % bonus, as the capture pays it.
-                    await AchievementHandler.ClaimAsync(at.ToClient,
+                    await AchievementHandler.ClaimAsync(at.Player,
                         ConnectionProtocol.Push(Op.Mga, Hex("08ffffffffffffffffff01")));
 
                     await at.NextAsync(Op.Kub);
@@ -168,7 +168,7 @@ namespace Jondo.Unity.Tests.Sessions
                     Assert.Equal(ExperienceTable.LevelFloor(200) + 545, at.Player.State.Experience);
 
                     // Paid once: a second claim finds nothing owed and says nothing.
-                    await AchievementHandler.ClaimAsync(at.ToClient,
+                    await AchievementHandler.ClaimAsync(at.Player,
                         ConnectionProtocol.Push(Op.Mga, Hex("08a046")));
                     await at.NothingAsync();
 
@@ -241,12 +241,12 @@ namespace Jondo.Unity.Tests.Sessions
                     // quest 965, "PL>19&Ad=11", on 26 September. His other replies take nothing.
                     Assert.Equal(1625, Almanax.Giver);
                     at.Player.State.OpenDialogueNpcId = 1625;
-                    await QuestEngine.OnReplyAsync(at.ToClient, 12047);
+                    await QuestEngine.OnReplyAsync(at.Player, 12047);
                     Assert.Null(QuestEngine.Log!.Run(965));
                     await AlmanaxOfferingHandler.ReplyAsync(at.ToClient, AlmanaxOfferingHandler.WillingToOffer);
                     // «Nueva misión» (lqn 54) goes before every ief of the tutorial capture.
                     await at.NextAsync(Op.Lqn);
-                    Assert.Equal(QuestProtocol.BuildQuestStarted(965), await at.NextAsync(Op.Ief));
+                    Assert.Equal(new QuestStartedEvent(965), await at.NextEventAsync());
                     Assert.True(QuestEngine.Log!.Active(965));
 
                     // Once handed in, not again the same day.
@@ -316,13 +316,13 @@ namespace Jondo.Unity.Tests.Sessions
 
                     // Today's offering made: one page.
                     foreach (var objective in QuestEngine.Book!.Of(965)!.Steps[0].Objectives)
-                        await QuestEngine.TickAsync(at.ToClient, 965, objective.Id);
+                        await QuestEngine.TickAsync(at.Player, 965, objective.Id);
                     Assert.False(QuestEngine.Log!.Active(965));
                     Assert.Equal(1, Equipment.HowMany(13345));
 
                     // A year of them, brought to Ontoral: the pages go, the Dolmanax comes.
                     Assert.True(await Equipment.GiveAsync(at.ToClient, 13345, 364));
-                    await QuestEngine.OnTalkingToAsync(at.ToClient, 1625);
+                    await QuestEngine.OnTalkingToAsync(at.Player, 1625);
                     Assert.True(QuestEngine.Log!.Active(954));   // a hello hands nothing over
                     Assert.Contains(AlmanaxOfferingHandler.ShowThePages, AlmanaxOfferingHandler.Opening().Replies);
                     Assert.Equal(AlmanaxOfferingHandler.Proud,
@@ -387,13 +387,17 @@ namespace Jondo.Unity.Tests.Sessions
         /// An aura clicked in the attitudes is shown, not played: the character redrawn with it (jsn,
         /// its option f5 { f1 { f1 aura } }), and taken off with the next step --
         /// «Apariencias\utilizar aura de septango-luego cancelarla caminando un paso». The client's
-        /// own khl for the main aura (f2 set) gets no answer, as in the captures.
+        /// own khl (f2 set) shows only the main aura: it is how «Activer automatiquement mon aura
+        /// de face» asks for it.
         /// </summary>
         [Fact]
         public async Task An_aura_from_the_attitudes_shows_until_the_next_step()
         {
             if (!Available) return;
             Emotes.Load();
+            // The aura column comes with it, as the server starts: on CI's freshly unpacked base no
+            // other test may have added it yet, and the aura saved below was lost in silence.
+            Wardrobe.Initialize();
             const long Account = 8_900_000_042;
             const int Septango = 206;
             long character = DatabaseManager.CreateCharacter(Account, 1, "Aura-Uno", 8, 0, 1,
@@ -423,11 +427,18 @@ namespace Jondo.Unity.Tests.Sessions
                     // A step: without it.
                     await SlotLookHandler.OnMovingAsync(pipe.ToClient);
                     Assert.False(Carries(await pipe.Next(Op.Jsn)));
+
+                    // Once it is the main aura, the client's own khl facing the screen shows it.
+                    Wardrobe.SaveAura(character, Septango);
+                    await EmoteHandler.PlayAsync(pipe.ToClient, ConnectionProtocol.Push(Op.Khl, Hex("08ce011001")));
+                    Assert.Equal(Septango, Wardrobe.ShownBy(character));
+                    Assert.True(Carries(await pipe.Next(Op.Jsn)));
                 }
             }
             finally
             {
                 Wardrobe.StopShowing(character);
+                Wardrobe.SaveAura(character, Wardrobe.None);
                 DatabaseManager.DeleteCharacter(character, Account);
             }
         }

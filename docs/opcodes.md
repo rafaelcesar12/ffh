@@ -155,7 +155,7 @@ its own stored capture to decide what to substitute, not reading the client.
 | `jru` | S→C | 719 / 86 files | "Load this map." Sending it twice makes the client reload the world in a loop. | `BuildLoadMap`, `WorldEntry.SendMapEntryStateAsync` | `f2: map id` |
 | `hjk` | S→C | 7 / 6 files | Travels with `jru` on every map change. | `BuildMapDiscovered` | `f1: packed [map id]` |
 | `jrh` | C→S | 690 / 86 files | "Who is on this map?" Unanswered, the map draws empty: no avatar, no NPCs, no monsters. | `GameNodeProxy` | — |
-| `jss` | S→C | 692 / 87 files | The actors. `f6` is not decoration: with a zero subarea the client throws inside `MapInfoUI.SetInfoFromSubarea` and loses the map name, the coordinates and the minimap marker. Actor type comes from which field appears inside `f2.f1` — `f5` player, `f7` NPC, `f4` monster group; NPCs and groups use negative contextual ids. | `BuildMapActors` | `f2: map id, f6: subarea id, f5 (rep) { f1 { f1: cell, f2: facing }, f2 {…what it is…}, f3: contextual id }` |
+| `jss` | S→C | 692 / 87 files | The actors. `f6` is not decoration: with a zero subarea the client throws inside `MapInfoUI.SetInfoFromSubarea` and loses the map name, the coordinates and the minimap marker. Actor type comes from which field appears inside `f2.f1` — `f5` player, `f7` NPC, `f4` monster group; NPCs and groups use negative contextual ids. | `MapInformationMessages` / `MapActorMessages` | `f2: map id, f6: subarea id, f5 (rep) { f1 { f1: cell, f2: facing }, f2 {…what it is…}, f3: contextual id }` |
 | `lva` | S→C | 1071 / 88 files | "That is every actor." Empty, immediately behind `jss`. Without it the client never counts the map as loaded: it waits about two seconds, asks again with `knm`, `kno`, `kny`, and starts over. | `BuildActorsComplete` | empty |
 | `kub` | S→C | 188 / 54 files | The character sheet. The container field is **not** the same for every characteristic and getting it wrong kills the whole sheet with a `NullReferenceException` in the client's own log. `CharacteristicCatalogue.Default` defines the IDs, semantic kinds and fixed bases in code. Sent twice — once with the character, once with the map; the client keeps the second. | `CharacteristicsMessages.Snapshot`, `CharacteristicsMessages.SendAsync` | `f2 { f1: where the next level starts, f7: where this one started, f8: experience held, f10: kamas, f11 (rep) { f1: id, <container> {…} } }` — containers: `f4 {f2: base, f3: parchments, f7: equipment}` for most, `f5 {f1: base, f5: bonus}` for 1 and 23, `f2 {f2: value}` for 29, 47 and 96 |
 | `irq` | S→C | 93 / 11 files | Jobs. The id list is kept (it is game data); the captured progress is thrown away and every job goes out at level 1. | `WorldEntry.ResetJobs` | `f1 (rep) { f1: job id, f3: level, f4/f5: experience }` |
@@ -343,7 +343,7 @@ and the range without claiming to be the original.
 | `jbg` | C→S | 3 / 1 file | A slice of the room. It arrives **split** — three in a row in the capture — and each slice carries the **whole** room, not a diff. Saving each slice separately would have the first one erase what the other two carry, so they are collected and written once on close. | `MerkasakoHandler.CollectFurniture` | `f2 (rep) { f1: cell, f2: furniture, f3: orientation }` |
 | `jbk` `jav` `jaw` | C→S | 1 / 1 file each | Close the placement mode. All three arrive together on accept. | `MerkasakoHandler.CloseEditorAsync` | empty |
 | `jba` | S→C | 2 / 1 file | Placement mode closed. | `MerkasakoHandler` | empty |
-| `jbu` | S→C | 10 / 7 files | The furniture in the room, expected behind the map. Same shape as `jbg` but on `f1` instead of `f2`. | `BuildHavenBagFurniture` | `f1 (rep) { f1: cell, f2: furniture, f3: orientation }` |
+| `jbu` | S→C | 10 / 7 files | The furniture in the room, expected behind the map. Same shape as `jbg` but on `f1` instead of `f2`. | `MerkasakoHandler.SendFurnitureAsync` (`HavenBagFurnitureEvent`) | `f1 (rep) { f1: cell, f2: furniture, f3: orientation }` |
 | `jaz` | S→C | 14 / 7 files | Sent with the furniture, between `jss` and `lva`. Meaning *not established*. | `MerkasakoHandler` | empty |
 
 ### 2.11 The appearance window (cosmetics)
@@ -367,7 +367,7 @@ across the fourteen captures that end in a save.
 | `lxw` | C→S | 5 / 2 files | The aura. | `AppearanceHandler.AuraAsync` | `f2: aura` |
 | `lwx` | S→C (f3) | 5 / 2 files | Acknowledgement. | `AppearanceHandler` | `f1: 1` |
 | `lxc` | S→C | 3234 / 57 files | "Your look changed" — the preview. `f1` is a uuid, identical across a session and different per character. Where the client learns it has not been found; here it is derived from the character id so that it is at least consistent. | `BuildLookChanged` | `f1: uuid, f2: the new look` |
-| `jsn` | S→C | 728 / 130 files | "This actor changed" — the whole actor block, with cell, id and the new look. This is what the client actually redraws from; `lxc` alone updated the inventory doll and left the figure on the map wearing the old mount. | `BuildActorRefreshed` | `f1 { the actor block }` |
+| `jsn` | S→C | 728 / 130 files | "This actor changed" — the whole actor block, with cell, id and the new look. This is what the client actually redraws from; `lxc` alone updated the inventory doll and left the figure on the map wearing the old mount. | `MapPresenceService` / `MapActorMessages` (players); feature serializers (standalone non-player updates) | `f1 { the actor block }` |
 
 `lxs` — the Save button — is in section 2.12, because saving commits the title and the ornament
 together with the look.
@@ -387,7 +387,7 @@ not a zero inside.
 | `lxs` | C→S | 27 / 22 files | **Save.** This is where the draft becomes what is worn, and where the look reaches the rest of the map. | `WardrobeHandler.SaveAsync` | empty |
 | `lyu` | S→C (f3) | 27 / 22 files | Save acknowledged. | `WardrobeHandler` | `f1: 1` |
 | `hid` | S→C | 2 / 2 files | The title now worn. **Empty** means none — not a zero inside. | `BuildTitleUpdated` | `f1: title`, or empty |
-| `hif` | S→C | 4 / 4 files | The ornament now worn, same rule. | `BuildOrnamentUpdated` | `f1: ornament`, or empty |
+| `hif` | S→C | 4 / 4 files | Ornament selection update. The server omits the scalar under the [after-selection policy](populated-unmapped-fields.md#after-selection-omission-policy). | `OrnamentSelectedEvent` | empty in server output |
 | `hhy` | S→C | 8 / 6 files | What the account **owns**. The client already carries the whole catalogue; anything not in this list is drawn greyed out. Sent once, on world entry. A freshly created character's `hhy` arrives with zero bytes. | `BuildTitlesOwned` | `f1: packed titles, f2: packed ornaments` |
 | `lyt` | S→C | 7 / 6 files | The saved wardrobe outfits. **Mandatory**: without it the cosmetics window plays its sound and never draws, dying in `CosmeticUi.DisplayOutfit` on a null reference because it has no outfit to show. Seen in the client's own `Player.log`. | `BuildOutfits` | `f1 (rep): each saved outfit, f2: the one worn` |
 
@@ -433,7 +433,7 @@ values remain unresolved.
 | Opcode | Dir | Wire | What it does | Handler | Payload |
 |---|---|---|---|---|---|
 | `kqo` | C→S | 2890 / 235 files | The heartbeat, every five seconds for as long as the client is in the world. The most frequent client message in the whole capture set and present in 235 of the 242 files. | `GameNodeProxy` | — |
-| `kqy` | S→C | 2881 / 234 files | The answer, and nothing else. Twenty-four in a row 5,000 ms apart in the tutorial capture, each followed by exactly one `kqy`. The frame comes out byte for byte like the captured one: `1d 0a 1b 0a 19 0a 13 type.ankama.com/kqy 12 02 08 01`. Note it travels on root field 1, not the answer field. | `BuildHeartbeatAnswer` | `f1: 1` |
+| `kqy` | S→C | 2881 / 234 files | The answer, and nothing else. Twenty-four in a row 5,000 ms apart in the tutorial capture, each followed by exactly one `kqy`. The frame comes out byte for byte like the captured one: `1d 0a 1b 0a 19 0a 13 type.ankama.com/kqy 12 02 08 01`. Note it travels on root field 1, not the answer field. | `GameEntryService` (`PongEvent`) | `f1: Quiet` (1 in this capture) |
 
 Answering `kqo` with the map block is what made the client reload the world in a loop: the block
 carries `jru`, and `jru` means "load this map". The block now goes out on the first `kqo` of an
@@ -452,6 +452,12 @@ entry (or on `lqc`, whichever comes first) and the heartbeat gets its own answer
 ---
 
 ## 3. Implemented, but on a dead code path
+
+This section preserves the historical audit. **14 November 2026:** the old
+map/movement/loading-handshake branches and `MapLoadHandler`, `MapChangeHandler`,
+`TransitionPacketsBuilder` and `TransitionPayloads` have been removed. The builder
+counts and call-site tables below describe the earlier source snapshot. See
+[current retirement details](game-protocol.md#retired-maptransition-routes).
 
 The branches below are keyed on messages the 3.6.10.10 client never sends.
 Most belong to the 3.6.4.3 world-loading handshake (`kkn`, `lpj`,
@@ -613,6 +619,12 @@ Additional aliases share the `||` chains of the branches above: `ise`, `jtk` and
 share the authentication branch, `jqf` and `igx` the `kkr` branch, and `joi`, `jrb`,
 `jub`, `jyk`, `jyz` and `jza` the fight branch with `jxx`.
 Removing a whole branch therefore retires more than the one opcode that names it.
+
+**14 November 2026 update:** the dispatch count above is historical. The `ibt`,
+`hmv`, `lpj`, `loy`, `kkr` (including `jqf`/`igx`) and `joi`/`jos`/`jpp`
+branches are now removed. Supported map information and movement go through
+`jrh` and `jrw`/`jqi`/`jqk` respectively. This does not retire the live feature
+handlers that still use raw dispatch.
 
 **Seventy-seven are never dispatched.** They are constants, builders nothing calls, protobuf
 descriptors in the old `TypeRegistry` (gone since), and entries in the label table of `NetworkMessage.cs`. `bcy`, `bvr`

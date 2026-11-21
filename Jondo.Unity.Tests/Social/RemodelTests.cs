@@ -58,20 +58,20 @@ namespace Jondo.Unity.Tests.Social
 
                     // Used: spent, popup 41, the change waits.
                     long potion = Give(character, NamePotion);
-                    await ItemUseHandler.UseAsync(pipe.ToClient, Use(potion));
+                    await ItemUseHandler.UseAsync(pipe.Session, Use(potion));
                     Assert.Equal(41, await PopupOf(pipe));
                     Assert.Null(Equipment.ByUid(potion));
                     Assert.Equal(CharacterRemodel.Change.Name, CharacterRemodel.PendingOf(character));
 
                     // Another change while that one waits: popup 43, the potion stays.
                     long other = Give(character, SexPotion);
-                    await ItemUseHandler.UseAsync(pipe.ToClient, Use(other));
+                    await ItemUseHandler.UseAsync(pipe.Session, Use(other));
                     Assert.Equal(43, await PopupOf(pipe));
                     Assert.NotNull(Equipment.ByUid(other));
 
                     // The next entry opens the Rename window with the name as it is.
                     var me = DatabaseManager.GetCharacterById(character)!;
-                    await RemodelHandler.OnEnterWorldAsync(pipe.ToClient, me);
+                    await RemodelHandler.OnEnterWorldAsync(pipe.Session, me);
                     Assert.Equal("Remodelo-Uno", Encoding.UTF8.GetString(Field(await pipe.Next(Op.Kvk), 1)!.BytesValue));
 
                     // A badly made name is refused with popup 40; a good one is taken.

@@ -56,6 +56,19 @@ namespace Jondo.Unity.Server.Network
                         prospecting = stats.Prospecting,
                         wisdom = stats.Wisdom,
                         autoPass = Heroes.PassesOnHisOwn(c.Id),
+                        questSync = heroes.Contains(c.Id) && Heroes.SharesQuests(c.Id),
+                        // The quests he stayed behind his master in, and why: the mod turns his
+                        // quests button red and names them, in the client's language, on hovering it.
+                        questLag = heroes.Contains(c.Id)
+                            ? Heroes.LagsOf(me, c.Id).Select(l => new
+                            {
+                                quest = l.QuestId,
+                                step = l.StepId,
+                                reason = l.Reason.ToString().ToLowerInvariant(),
+                                item = l.ItemId,
+                                count = l.ItemCount,
+                            }).ToList<object>()
+                            : new List<object>(),
                         // His look as the game's protocol carries it, on foot: the mod draws him
                         // with the client's own portrait, seated or standing.
                         look = LookOf(c),
@@ -253,6 +266,17 @@ namespace Jondo.Unity.Server.Network
             return Heroes.SetAutoPass(me.State.CharacterId, Numero(cuerpo, "id"), on) ? Bien(new { autoPass = on }) : Mal(409, "none");
         }
 
+        private static Respuesta HeroesQuestSync(string cuerpo, long account)
+        {
+            var me = InTheWorld(account);
+            if (me == null) return Mal(409, "world");
+            using var turn = me.EnterTurnAsync().GetAwaiter().GetResult();
+            bool on = Numero(cuerpo, "on") != 0;
+            return Heroes.SetQuestSync(me.CharacterId, Numero(cuerpo, "id"), on)
+                ? Bien(new { questSync = on })
+                : Mal(409, "none");
+        }
+
         private static Respuesta HeroesLootTo(string cuerpo, long account)
         {
             var me = InTheWorld(account);
@@ -273,6 +297,7 @@ namespace Jondo.Unity.Server.Network
         {
             var me = InTheWorld(account);
             if (me == null) return Mal(409, "world");
+            using var turn = me.EnterTurnAsync().GetAwaiter().GetResult();
             return Heroes.Disconnect(me.State.CharacterId, Numero(cuerpo, "id"))
                 ? Bien(new { disconnected = true })
                 : Mal(409, "none");

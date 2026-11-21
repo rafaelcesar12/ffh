@@ -279,7 +279,7 @@ namespace JondoFix
         {
             try
             {
-                string path = DataFile(@"dofus3_data\items.json");
+                string path = DataFile(Path.Combine("dofus3_data", "items.json"));
                 if (!File.Exists(path))
                 {
                     MelonLogger.Msg($"[JondoFix] Optional legacy items.json not found at {path}; client metadata will be used.");
@@ -391,7 +391,7 @@ namespace JondoFix
         {
             try
             {
-                string path = DataFile(@"datos\vendedores_jondo.json");
+                string path = DataFile(Path.Combine("datos", "vendedores_jondo.json"));
                 if (!File.Exists(path))
                 {
                     LoggerInstance.Msg($"[JondoFix] There is no {Path.GetFileName(path)}; the vendors " +
@@ -423,6 +423,7 @@ namespace JondoFix
         public override void OnInitializeMelon()
         {
             TestInput.Start(LoggerInstance);
+            StaffConsole.HookAdminMenu(LoggerInstance);
             LoadItemNames();
             LoadVendorNames();
             UseLocalRedirect = IsEmulatorActive();
@@ -758,11 +759,15 @@ namespace JondoFix
             // The test harness's pointer and keyboard, when the client was started for it.
             TestInput.Tick();
 
+            // The monster group tooltip's loot and achievements, as the server answers them.
+            MonsterGroupTooltip.Tick();
+
             // The administrator's item window: its key, and what the server answered it.
             if (IsJondoAdministrator)
             {
                 try { AdminItemsUi.Tick(); }
                 catch (Exception ex) { LoggerInstance.Warning($"[JondoFix] Item window: {ex.Message}"); }
+                StaffConsole.Tick(LoggerInstance);
             }
 
             if (UseLocalRedirect && !itemMappingsLoadedFromClient)

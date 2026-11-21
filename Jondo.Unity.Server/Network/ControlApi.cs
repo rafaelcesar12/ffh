@@ -92,6 +92,7 @@ namespace Jondo.Unity.Server.Network
                     case Prefijo + "heroes/connect": return ConSesion(cuerpo, cuenta => HeroesConnect(cuerpo, cuenta));
                     case Prefijo + "heroes/disconnect": return ConSesion(cuerpo, cuenta => HeroesDisconnect(cuerpo, cuenta));
                     case Prefijo + "heroes/portrait": return ConSesion(cuerpo, cuenta => HeroesPortrait(cuerpo, cuenta));
+                    case Prefijo + "heroes/quests": return ConSesion(cuerpo, cuenta => HeroesQuestSync(cuerpo, cuenta));
                     case Prefijo + "heroes/autopass": return ConSesion(cuerpo, cuenta => HeroesAutoPass(cuerpo, cuenta));
                     case Prefijo + "heroes/loot": return ConSesion(cuerpo, cuenta => HeroesLootTo(cuerpo, cuenta));
                     case Prefijo + "heroes/sheet": return ConSesion(cuerpo, cuenta => HeroesSheet(cuerpo, cuenta));
@@ -99,6 +100,8 @@ namespace Jondo.Unity.Server.Network
                     case Prefijo + "heroes/create": return ConSesion(cuerpo, cuenta => HeroesCreate(cuerpo, cuenta));
                     case Prefijo + "heroes/name": return ConSesion(cuerpo, HeroesName);
                     case Prefijo + "heroes/preview": return ConSesion(cuerpo, _ => HeroesPreview(cuerpo));
+                    // JondoFix's monster group tooltip: its loot and achievements (ControlApiMonsterTooltip.cs).
+                    case Prefijo + "monsters/tooltip": return ConSesion(cuerpo, cuenta => MonsterTooltip(cuerpo, cuenta));
 
                     // ─── Administration ─────────────────────────────────────────────────────
                     // They command the server, not an account. Role 4 and it is checked here,
@@ -258,13 +261,7 @@ namespace Jondo.Unity.Server.Network
 
                     if (sheetChanged || kamasChanged)
                     {
-                        DatabaseManager.SaveCurrentCharacter();
-                        CharacteristicsMessages.Live.SendAsync(sesion).GetAwaiter().GetResult();
-                        sesion.SendAsync(ConnectionProtocol.Push(Op.Ivf,
-                            ConnectionProtocol.BuildKamas(estado.Kamas))).GetAwaiter().GetResult();
-                        sesion.SendAsync(ConnectionProtocol.Push(Op.Iun,
-                            ConnectionProtocol.BuildPods(ConnectionProtocol.Carried(estado), ConnectionProtocol.Capacity(estado))))
-                            .GetAwaiter().GetResult();
+                        CommandHandler.RefreshSheetAsync(sesion).GetAwaiter().GetResult();
                     }
 
                     // A delivery failure has to be stated. GrantItemAsync returns null when

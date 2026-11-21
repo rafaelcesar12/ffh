@@ -3,11 +3,13 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Jondo.Unity.Protocol;
+using Jondo.Unity.Protocol.Game;
 using Jondo.Unity.Server;
 using Jondo.Unity.Server.Handlers;
 using Jondo.Unity.Server.Managers;
 using Jondo.Unity.Server.Network;
 using Jondo.Unity.Tests.Economy;
+using Jondo.Unity.Tests.World;
 using Xunit;
 
 namespace Jondo.Unity.Tests.Social
@@ -16,7 +18,8 @@ namespace Jondo.Unity.Tests.Social
     public sealed class AuraTests
     {
         private const long Account = 8_900_000_082;
-        private const int Power = 22, PowerBones = 170, Other = 23, Sit = 1;
+        // The character below is level 100: the power aura's level 100 bones.
+        private const int Power = 22, PowerBones = 169, Other = 23, Sit = 1;
 
         private static ProtoField? Field(byte[] message, int number)
             => ProtoMessage.Parse(message).Fields.FirstOrDefault(f => f.FieldNumber == number);
@@ -30,16 +33,6 @@ namespace Jondo.Unity.Tests.Social
                 return (long)(Field(Field(sub.BytesValue, 1)!.BytesValue, 3)?.VarIntValue ?? 0);
             }
             return 0;
-        }
-
-        /// <summary>The aura option of an actor block's humanoid body (f2 f1 f5 f3 f5 { f1 { f1 } }); 0 for none.</summary>
-        private static long AuraOptionOf(byte[] actor)
-        {
-            byte[] humanoid = Field(Field(Field(actor, 2)!.BytesValue, 1)!.BytesValue, 5)!.BytesValue;
-            byte[] body = Field(humanoid, 3)!.BytesValue;
-            var first = ProtoMessage.Parse(body).Fields.First(f => f.FieldNumber == 5);
-            var aura = Field(first.BytesValue, 1);
-            return aura == null ? 0 : (long)(Field(aura.BytesValue, 1)?.VarIntValue ?? 0);
         }
 
         private static async Task<byte[]> Until(ClientPipe pipe, string opcode)
@@ -68,18 +61,18 @@ namespace Jondo.Unity.Tests.Social
                     pipe.Session.State.Emotes = new HashSet<int> { Sit, Power };
                     byte[] Lxw(int aura) => ConnectionProtocol.Push(Op.Lxw, Pb.New().VarIfNotZero(2, aura).Build());
 
-                    // Taken: empty lym notification, answered lwx f1, and on the look others see.
-                    // The unused lym scalar is omitted under
-                    // docs/populated-unmapped-fields.md#after-selection-omission-policy.
+                    // Taken: lym tells the client its main aura, answered lwx f1, and on the look
+                    // others see.
                     await AppearanceHandler.AuraAsync(pipe.ToClient, Lxw(Power));
-                    Assert.Empty(await pipe.Next(Op.Lym));
+                    Assert.Equal(Power, (int)Field(await pipe.Next(Op.Lym), 1)!.VarIntValue);
                     Assert.Equal(1, (int)Field(await pipe.Next(Op.Lwx), 1)!.VarIntValue);
                     await Until(pipe, Op.Jsn);
                     Assert.Equal(Power, Wardrobe.AuraOf(character));
                     var me = DatabaseManager.GetCharacterById(character)!;
                     Assert.Equal(PowerBones, AuraBonesOf(CharacterLookBuilder.MapLook(me)));
                     Assert.Equal(0, AuraBonesOf(CharacterLookBuilder.BuildLook(me, paraLaVentana: true)));
-                    Assert.Equal(Power, AuraOptionOf(ConnectionProtocol.BuildPlayerActorBlock(me, 300, 1, Account)));
+                    var actor = MapActorMessages.Player(me, 300, 1, Account);
+                    Assert.Equal(Power, Assert.IsType<HumanOptionCaseEmoteOption>(MapActorAssertions.Human(actor).Options[0].OptionCase).Value.EmoteId);
 
                     // An aura not known, and an emote that is no aura: refused, the aura as it was.
                     foreach (int refused in new[] { Other, Sit })
@@ -90,10 +83,10 @@ namespace Jondo.Unity.Tests.Social
                     }
 
                     // The outfit carries it in its f9.
-                    byte[] outfit = Field(ConnectionProtocol.BuildOutfits(me), 2)!.BytesValue;
-                    Assert.Equal(Power, (int)Field(outfit, 9)!.VarIntValue);
+                    var outfit = WardrobeMessages.Live.Snapshot(pipe.Session, me, Outfits.Of(character)).Current!;
+                    Assert.Equal(Power, outfit.AuraEmoteId);
 
-                    // Taken off.
+                    // Taken off: lym without its aura.
                     await AppearanceHandler.AuraAsync(pipe.ToClient, Lxw(0));
                     Assert.Empty(await pipe.Next(Op.Lym));
                     Assert.Equal(1, (int)Field(await pipe.Next(Op.Lwx), 1)!.VarIntValue);
@@ -106,5 +99,13 @@ namespace Jondo.Unity.Tests.Social
                 DatabaseManager.DeleteCharacter(character, Account);
             }
         }
+
+        [Theory]
+        [InlineData(100, 169)]
+        [InlineData(199, 169)]
+        [InlineData(200, 170)]
+        [InlineData(204, 170)]
+        public void The_power_aura_is_the_level_100_one_until_200(int level, int bones)
+            => Assert.Equal(bones, Cosmetics.AuraBones(Power, level));
     }
 }

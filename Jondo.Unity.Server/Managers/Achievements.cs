@@ -52,6 +52,9 @@ namespace Jondo.Unity.Server.Managers
         private static volatile AchievementCatalogue? _book;
         private static readonly object _loadLock = new object();
 
+        /// <summary>The catalogue, or null before <see cref="Load"/>.</summary>
+        public static AchievementCatalogue? Book => _book;
+
         /// <summary>This character's badges. Null before entering the world.</summary>
         public static AchievementLog? Log => SessionContext.State.Achievements;
 
@@ -132,12 +135,13 @@ namespace Jondo.Unity.Server.Managers
                 return;
             }
 
-            var log = new AchievementLog(_book, new CharacterFacts());
+            var log = new AchievementLog(_book, new CharacterFacts()) { Owner = characterId };
 
-            // The account's, not the character's: what one character of the account achieved is
-            // achieved for all of them and paid once (the captured lists name up to four different
-            // characters). Read per character, another character of the same account earned it all
-            // again and was paid for it again. The character's own row is preferred, then a paid one.
+            // The account's list: what one character of the account achieved shows for all of
+            // them, with who did it (the captured lists name up to four different characters). The
+            // character's own row is preferred, then a paid one. One another character did is still
+            // his to earn and be paid for (AchievementLog.Owner), as the game has had it since 2.45:
+            // only the items of the Donjons, Monstres and Événements ones are paid once per account.
             long account = DatabaseManager.GetCharacterById(characterId)?.AccountId ?? 0;
             var rowsOf = account != 0
                 ? DatabaseManager.LoadAccountAchievements(account)
@@ -151,10 +155,11 @@ namespace Jondo.Unity.Server.Managers
                 // another character's leaves it to be earned and paid again.
                 if (_book.Of(group.Key)?.EachCharacter == true && group.All(r => r.CharacterId != characterId)) continue;
 
-                bool claimed = group.Any(r => r.Claimed);
                 long achiever = group.Any(r => r.CharacterId == characterId) ? characterId
                                 : group.Where(r => r.Claimed).Select(r => r.CharacterId).FirstOrDefault();
                 if (achiever == 0) achiever = group.First().CharacterId;
+                // Paid or not as the achiever's own row says: another character's claim is not his.
+                bool claimed = group.Any(r => r.CharacterId == achiever && r.Claimed);
                 log.Restore(group.Key, claimed, achiever);
                 log.NoteLevel(group.Key, group.Where(r => r.CharacterId == achiever).Select(r => r.Level).FirstOrDefault());
                 rows++;
@@ -174,19 +179,8 @@ namespace Jondo.Unity.Server.Managers
         /// The character's achievements (mft), in place of the recorded account's 954, and then
         /// whatever they had already done without it being recognised.
         /// </summary>
-        public static async Task SendListAsync(NetworkStream stream)
-        {
-            var log = Log;
-            if (log == null) return;
-
-            var state = SessionContext.State;
-            await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                ConnectionProtocol.Push(Op.Mft, AchievementProtocol.BuildList(ListOf(log, state.CharacterId, state.CharacterLevel))));
-
-            var earned = log.CheckEverything();
-            state.AchievementLevelChecked = state.CharacterLevel;
-            await AnnounceAsync(stream, earned);
-        }
+        public static Task SendListAsync(GameSession session)
+            => AchievementStateService.Live.SendListAsync(session);
 
         /// <summary>
         /// The list mft carries: every achievement of the account, sorted, each with the character
@@ -217,14 +211,15 @@ namespace Jondo.Unity.Server.Managers
         // ─── What moves them ─────────────────────────────────────────────────────
 
         /// <summary>A quest has just been finished. Grant whatever that earned.</summary>
-        public static Task AfterQuestAsync(NetworkStream stream, int questId)
+        public static Task AfterQuestAsync(GameSession session, int questId)
         {
+            using var context = SessionContext.Push(session);
             var book = _book;
             if (book == null) return Task.CompletedTask;
 
             // An alignment quest or an apprenticeship moves what «Pa>19» and «Pr=2|...» ask.
             var (level, rank) = Alignments.Moves(questId);
-            return CheckAsync(stream, book.WaitingOn("Qf", questId)
+            return CheckAsync(session, book.WaitingOn("Qf", questId)
                 .Concat(book.WaitingOn("Qc", questId))
                 .Concat(book.WaitingOn("QF", questId))
                 .Concat(book.WaitingOn("QQ"))
@@ -236,12 +231,12 @@ namespace Jondo.Unity.Server.Managers
         /// A quest objective has just been validated: the achievements waiting on it (Qo). The
         /// tutorial's «Primer tiempo» is earned this way, on 2502's objective 19173.
         /// </summary>
-        public static Task AfterObjectiveAsync(NetworkStream stream, int objectiveId)
+        public static Task AfterObjectiveAsync(GameSession session, int objectiveId)
         {
             var book = _book;
             if (book == null) return Task.CompletedTask;
             var waiting = book.WaitingOn("Qo", objectiveId);
-            return waiting.Count == 0 ? Task.CompletedTask : CheckAsync(stream, waiting);
+            return waiting.Count == 0 ? Task.CompletedTask : CheckAsync(session, waiting);
         }
 
         /// <summary>
@@ -254,12 +249,35 @@ namespace Jondo.Unity.Server.Managers
         /// The level is looked at here too, and only when it changed, because this is where a
         /// character comes back to after the fight that gave it.
         /// </remarks>
-        public static async Task OnMapEnteredAsync(NetworkStream stream, long mapId, int subAreaId)
+        public static async Task OnMapEnteredAsync(GameSession session, long mapId, int subAreaId)
         {
+            using var context = SessionContext.Push(session);
             var book = _book;
             var state = SessionContext.State;
             if (book == null || Log == null) return;
 
+            var candidates = ArrivedOn(book, mapId, subAreaId);
+
+            if (state.AchievementLevelChecked != state.CharacterLevel)
+            {
+                state.AchievementLevelChecked = state.CharacterLevel;
+                candidates.AddRange(book.WaitingOn("PL"));
+            }
+
+            // And whatever the last fight set aside.
+            candidates.AddRange(state.AchievementsPending);
+            state.AchievementsPending.Clear();
+
+            await CheckAsync(session, candidates);
+        }
+
+        /// <summary>
+        /// What arriving on a map may earn the character of the current context: the zone explored,
+        /// the maps some achievement asks to have been on, and what he stands on and holds there.
+        /// The zone and the maps are written down once, as his own.
+        /// </summary>
+        private static List<int> ArrivedOn(AchievementCatalogue book, long mapId, int subAreaId)
+        {
             var candidates = new List<int>();
             if (subAreaId > 0 && Tally(AchievementCatalogue.ExploreKey, subAreaId) == 0)
             {
@@ -273,12 +291,6 @@ namespace Jondo.Unity.Server.Managers
             candidates.AddRange(book.WaitingOn("HP"));
             candidates.AddRange(book.WaitingOn("lB"));
 
-            if (state.AchievementLevelChecked != state.CharacterLevel)
-            {
-                state.AchievementLevelChecked = state.CharacterLevel;
-                candidates.AddRange(book.WaitingOn("PL"));
-            }
-
             candidates.AddRange(book.WaitingOn("Pm", mapId));
             candidates.AddRange(book.WaitingOn("PO"));
 
@@ -290,12 +302,7 @@ namespace Jondo.Unity.Server.Managers
                 SetTally(VisitedKind, mapId, 1);
                 candidates.AddRange(onTheMap);
             }
-
-            // And whatever the last fight set aside.
-            candidates.AddRange(state.AchievementsPending);
-            state.AchievementsPending.Clear();
-
-            await CheckAsync(stream, candidates);
+            return candidates;
         }
 
         /// <summary>
@@ -303,12 +310,17 @@ namespace Jondo.Unity.Server.Managers
         /// his level, looked at in his own session and announced on his master's client.
         /// </summary>
         /// <remarks>
-        /// The achievements are the account's, and the master's log stands for the account while
-        /// the group lasts: what it earned since the hero was connected is his before he is looked
-        /// at, and what he earns is the master's after, so that neither earns one twice. The ones
-        /// each character earns for himself (EachCharacter) stay each his own.
+        /// The list is the account's, and the master's log stands for it while the group lasts:
+        /// what it earned since the hero was connected is shown to him before he is looked at, and
+        /// what he earns is shown to the master after. Each earns and is paid for his own, the
+        /// others' included (AchievementLog.Owner), as every character of an account may.
+        ///
+        /// Given the map he reached beside his master (<paramref name="mapId"/>), what arriving on
+        /// it earns is his too: the zone he explored with him, the maps he has been on. Only the
+        /// master's session gets the map's information, and the heroes following him through a
+        /// zone were left out of its exploration achievements (Keka-Bron/JondoEmu#213).
         /// </remarks>
-        public static async Task ForHeroAsync(GameSession master, GameSession hero)
+        public static async Task ForHeroAsync(GameSession master, GameSession hero, long mapId = 0, int subAreaId = 0)
         {
             var book = _book;
             var account = master.State.Achievements;
@@ -320,7 +332,8 @@ namespace Jondo.Unity.Server.Managers
                 var log = Log;
                 if (log == null) return;
 
-                var candidates = new List<int>(state.AchievementsPending);
+                var candidates = mapId != 0 ? ArrivedOn(book, mapId, subAreaId) : new List<int>();
+                candidates.AddRange(state.AchievementsPending);
                 state.AchievementsPending.Clear();
                 if (state.AchievementLevelChecked != state.CharacterLevel)
                 {
@@ -329,12 +342,15 @@ namespace Jondo.Unity.Server.Managers
                 }
                 if (candidates.Count == 0) return;
 
+                // What the group earned since he was connected, shown as the others': his own is
+                // left as it is, and the others' are still his to earn (AchievementLog.Owner).
                 if (account != null)
                     foreach (int id in account.Earned.ToList())
-                        if (book.Of(id)?.EachCharacter != true) log.Restore(id, account.WasClaimed(id), account.AchieverOf(id));
+                        if (book.Of(id)?.EachCharacter != true && !log.Has(id))
+                            log.Restore(id, account.WasClaimed(id), account.AchieverOf(id) is var by && by != 0 ? by : master.CharacterId);
 
                 var earned = log.CheckAll(candidates.Distinct());
-                await AnnounceAsync(master.Stream, earned);
+                await AchievementStateService.Live.AnnounceAsync(hero, master, earned);
 
                 if (account == null) return;
                 foreach (int id in earned)
@@ -347,12 +363,12 @@ namespace Jondo.Unity.Server.Managers
         }
 
         /// <summary>The character's level went up. The level achievements, looked at now.</summary>
-        public static Task AfterLevelAsync(NetworkStream stream)
+        public static Task AfterLevelAsync(GameSession session)
         {
             var book = _book;
             if (book == null) return Task.CompletedTask;
-            SessionContext.State.AchievementLevelChecked = SessionContext.State.CharacterLevel;
-            return CheckAsync(stream, book.WaitingOn("PL"));
+            session.State.AchievementLevelChecked = session.State.CharacterLevel;
+            return CheckAsync(session, book.WaitingOn("PL"));
         }
 
         /// <summary>Items crafted: the tally, and the achievements that count it or a job level.</summary>
@@ -361,23 +377,29 @@ namespace Jondo.Unity.Server.Managers
         /// ring is crafted — after the job's level-up and the character sheet, which is where this
         /// is called from.
         /// </remarks>
-        public static Task AfterCraftAsync(NetworkStream stream, int count)
+        public static Task AfterCraftAsync(GameSession session, int itemId, int count)
         {
+            using var context = SessionContext.Push(session);
             var book = _book;
             if (book == null || count <= 0) return Task.CompletedTask;
 
             SetTally(AchievementCatalogue.CraftKey, 0, Tally(AchievementCatalogue.CraftKey, 0) + count);
-            return CheckAsync(stream, book.WaitingOn(AchievementCatalogue.CraftKey)
+            var byItem = book.WaitingOn("EC", itemId);
+            if (itemId > 0 && byItem.Count > 0)
+                SetTally("EC", itemId, Tally("EC", itemId) + count);
+
+            return CheckAsync(session, book.WaitingOn(AchievementCatalogue.CraftKey)
                 .Concat(book.WaitingOn(AchievementCatalogue.JobKey))
-                .Concat(book.WaitingOn("EC")));
+                .Concat(book.WaitingOn("EC", 0))
+                .Concat(byItem));
         }
 
         /// <summary>A job's level went up: the achievements that want jobs at a level.</summary>
-        public static Task AfterJobLevelAsync(NetworkStream stream)
+        public static Task AfterJobLevelAsync(GameSession session)
         {
             var book = _book;
             if (book == null) return Task.CompletedTask;
-            return CheckAsync(stream, book.WaitingOn(AchievementCatalogue.JobKey));
+            return CheckAsync(session, book.WaitingOn(AchievementCatalogue.JobKey));
         }
 
         /// <summary>
@@ -483,21 +505,22 @@ namespace Jondo.Unity.Server.Managers
         /// done (its super category), <c>NT</c> guild tokens obtained, <c>EI</c> an item used,
         /// <c>Eu</c> items broken into runes, <c>EJ</c> a dream trial won (its achievement) -- and
         /// the achievements waiting on it are looked at
-        /// now; with no stream, back on the map, as a fight's are.
+        /// now; deferred checks run back on the map, as a fight's do.
         /// </summary>
-        public static async Task CountAsync(NetworkStream? stream, string kind, long key, long by = 1)
+        public static async Task CountAsync(GameSession session, string kind, long key, long by = 1, bool defer = false)
         {
+            using var context = SessionContext.Push(session);
             var book = _book;
             if (book == null || Log == null || by <= 0 || SessionContext.State.CharacterId == 0) return;
 
             SetTally(kind, key, Tally(kind, key) + by);
             var waiting = book.WaitingOn(kind, key).Concat(Totals.Contains(kind) ? book.WaitingOn(kind) : Array.Empty<int>()).ToList();
-            if (stream == null)
+            if (defer)
             {
                 SessionContext.State.AchievementsPending.UnionWith(waiting);
                 return;
             }
-            await CheckAsync(stream, waiting);
+            await CheckAsync(session, waiting);
         }
 
         /// <summary>The kinds judged as one number (NT&gt;99), whatever key their term carries.</summary>
@@ -533,46 +556,19 @@ namespace Jondo.Unity.Server.Managers
         private const string DungeonKind = "EMd";
 
         /// <summary>Looks at these achievements and announces the ones earned.</summary>
-        private static async Task CheckAsync(NetworkStream stream, IEnumerable<int> candidates)
+        private static async Task CheckAsync(GameSession session, IEnumerable<int> candidates)
         {
+            using var context = SessionContext.Push(session);
             var log = Log;
             if (log == null) return;
+            if (!session.HasTransport)
+            {
+                SessionContext.State.AchievementsPending.UnionWith(candidates);
+                return;
+            }
 
             var earned = log.CheckAll(candidates.Distinct());
-            await AnnounceAsync(stream, earned);
-        }
-
-        /// <summary>
-        /// Tells the client achievements are earned (mfu, one each) and writes them down.
-        /// </summary>
-        /// <remarks>
-        /// Only mfu. The captures never follow an mfu with an mfs: that comes after the claim, with
-        /// the character sheet the reward changed. The level in mfu is the character's, 1 and 2 in
-        /// the tutorial and 200 in the long-route capture.
-        /// </remarks>
-        private static async Task AnnounceAsync(NetworkStream stream, IReadOnlyList<int> earned)
-        {
-            var state = SessionContext.State;
-            foreach (int achievementId in earned)
-            {
-                Log?.Credit(achievementId, state.CharacterId);
-                Log?.NoteLevel(achievementId, LevelOnTheWire(state.CharacterLevel));
-                DatabaseManager.SaveAchievement(state.CharacterId, achievementId, claimed: false,
-                                                level: LevelOnTheWire(state.CharacterLevel));
-
-                await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                    ConnectionProtocol.Push(Op.Mfu, AchievementProtocol.BuildEarned(
-                        LevelOnTheWire(state.CharacterLevel), state.CharacterId, achievementId)));
-
-                // And whoever stands by reads it in his chat. INFERRED: no capture has an mgc, and
-                // the map is who the client's own line («ha desbloqueado el logro») suits.
-                if (SessionContext.Current is { } me && !state.IsInFight)
-                    await SessionRegistry.BroadcastToMapAsync(state.MapId, ConnectionProtocol.Push(Op.Mgc,
-                        AchievementProtocol.BuildUnlockedBy(state.CharacterId, state.CharacterName,
-                                                            LevelOnTheWire(state.CharacterLevel), achievementId)), me.Id);
-
-                Console.WriteLine($"[Achievements] {state.CharacterName} earns {achievementId}.");
-            }
+            await AchievementStateService.Live.AnnounceAsync(session, session, earned);
         }
 
         // ─── The window ───────────────────────────────────────────────────────────
@@ -683,8 +679,10 @@ namespace Jondo.Unity.Server.Managers
         /// Every character is offered all 539 titles and 167 ornaments already (see Titles); the
         /// titles a claim pays are written down for the character as well.
         /// </remarks>
-        public static async Task ClaimAsync(NetworkStream stream, int achievementId)
+        public static async Task ClaimAsync(GameSession session, int achievementId)
         {
+            using var context = SessionContext.Push(session);
+            var stream = session.Stream;
             var log = Log;
             if (log == null || _book == null) return;
 
@@ -705,6 +703,18 @@ namespace Jondo.Unity.Server.Managers
                 owed.AddRange(log.Unclaimed().Where(Mine).OrderBy(i => i));
             }
 
+            // The items of the Donjons, Monstres and Événements ones are paid once per account: those
+            // another character of it has already taken are not paid again.
+            HashSet<int>? takenByOthers = null;
+            bool ItemsTaken(int id)
+            {
+                if (!_book.PaysItemsOncePerAccount(id)) return false;
+                takenByOthers ??= DatabaseManager.LoadAccountAchievements(session.AccountId)
+                    .Where(r => r.Claimed && r.CharacterId != state.CharacterId)
+                    .Select(r => r.Achievement).ToHashSet();
+                return takenByOthers.Contains(id);
+            }
+
             bool levelled = false;
             foreach (int id in owed)
             {
@@ -716,16 +726,18 @@ namespace Jondo.Unity.Server.Managers
                 int earnedAt = log.LevelOf(id);
                 var payout = log.Payout(id, earnedAt > 0 ? earnedAt : state.CharacterLevel,
                                         CombatExperience.CharacterBonusPercent);
+                bool itemsTaken = ItemsTaken(id);
                 if (!log.MarkClaimed(id)) continue;
                 Titles.Grant(state.CharacterId, payout.Titles);
-                // Paid on the row of whoever achieved it: the account's achievement, paid once.
-                long achiever = log.AchieverOf(id);
-                DatabaseManager.SaveAchievement(achiever != 0 ? achiever : state.CharacterId, id, claimed: true);
+                // Paid on his own row: every character of the account is paid for what he achieved.
+                DatabaseManager.SaveAchievement(state.CharacterId, id, claimed: true);
 
                 await CharacterRewards.GiveKamasAsync(stream, payout.Kamas);
                 levelled |= await CharacterRewards.GiveExperienceAsync(stream, payout.Experience);
 
-                foreach (var (item, count) in payout.Items)
+                if (itemsTaken && payout.Items.Count > 0)
+                    Console.WriteLine($"[Achievements] The items of {id} were taken by another character of the account: not paid again.");
+                foreach (var (item, count) in itemsTaken ? new List<(int, int)>() : payout.Items)
                 {
                     if (!await Equipment.GiveAsync(stream, item, Math.Max(1, count)))
                     {
@@ -733,7 +745,7 @@ namespace Jondo.Unity.Server.Managers
                     }
                 }
 
-                foreach (int emote in payout.Emotes) await Emotes.LearnAsync(SessionContext.Current, emote);
+                foreach (int emote in payout.Emotes) await Emotes.LearnAsync(session, emote);
 
                 if (payout.Experience > 0 || payout.Kamas > 0) CharacterRewards.Save();
 
@@ -741,14 +753,14 @@ namespace Jondo.Unity.Server.Managers
                     ConnectionProtocol.Push(Op.Mfs, AchievementProtocol.BuildRewarded(id)));
 
                 Console.WriteLine($"[Achievements] {state.CharacterName} claims {id}: {payout.Experience} " +
-                                  $"experience, {payout.Kamas} kamas, {payout.Items.Count} item(s), " +
+                                  $"experience, {payout.Kamas} kamas, {(itemsTaken ? 0 : payout.Items.Count)} item(s), " +
                                   $"{payout.Emotes.Count} attitude(s)" +
                                   (payout.Titles.Count + payout.Ornaments.Count > 0
                                       ? $", {payout.Titles.Count} title(s) and {payout.Ornaments.Count} ornament(s) that are already offered to everybody."
                                       : "."));
             }
 
-            if (levelled) await AfterLevelAsync(stream);
+            if (levelled) await AfterLevelAsync(session);
         }
 
         // ─── Tallies ──────────────────────────────────────────────────────────────
@@ -867,7 +879,7 @@ namespace Jondo.Unity.Server.Managers
                 "EH" => S.ChallengesDone.Contains((int)key) ? 1 : 0,
                 "EB" or "HD" or "NC" or "EI" or "Eu" or "EJ" or VisitedKind => Tally(op, key),
                 _ when FromIntensity.Contains(op) => AtIntensityOrHarder(op, key),
-                "EC" => Tally(AchievementCatalogue.CraftKey, 0),
+                "EC" => key == 0 ? Tally(AchievementCatalogue.CraftKey, 0) : Tally("EC", key),
                 "ES" => Tally(AchievementCatalogue.ExploreKey, key),
                 "HP" => key == 1 && InOwnGuildHall() ? 1 : 0,
 

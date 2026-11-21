@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 
@@ -218,6 +219,59 @@ namespace Jondo.Unity.Server.Managers
         static SpellEffects()
         {
             Jondo.Unity.World.Fights.Buffs.UidDeLaPila = StackUidOf;
+            Jondo.Unity.World.Fights.Buffs.DispellableOfItsRow = row => DispellableOf(row.HechizoOrigen, row.NivelOrigen, row.EffectUid);
+            Jondo.Unity.World.Fights.Buffs.HookOutlivesItsCaster = hook =>
+                hook.Filas is { Count: > 0 } rows
+                && rows.All(uid => DispellableOf(hook.Hechizo, hook.Grado, uid) >= Jondo.Unity.World.Fights.Buffs.DispellableByStrongDispelOnly);
+        }
+
+        /// <summary>
+        /// The "dispellable" of a spell's row by its effect uid, in the normal list or the critical
+        /// one, or zero when the spell has no such row -- an effect of the engine's own, a weapon
+        /// line. Every one of the catalogue's 127,300 rows has a uid of its own, so the spell, the
+        /// grade and the uid name one row.
+        /// </summary>
+        public static int DispellableOf(int spell, int grade, int effectUid)
+        {
+            if (spell == 0 || effectUid == 0) return 0;
+            foreach (var row in De(spell, grade))
+                if (row.EffectUid == effectUid) return row.Dispellable;
+            foreach (var row in Criticos(spell, grade))
+                if (row.EffectUid == effectUid) return row.Dispellable;
+            return 0;
+        }
+
+        /// <summary>
+        /// Rows written in the content for a spell whose client rows do not do what its text says
+        /// (content/fights/idol_rules.json): the quest idols' spells carry only the marker 666, and
+        /// their descriptions are the fight's rules. Read before the database for that spell and grade.
+        /// </summary>
+        private static readonly Dictionary<(int, int), string> _written = new();
+
+        /// <summary>Writes a spell grade's rows, as the EffectsJson of SpellLevels, over the client's.</summary>
+        public static void Write(int spell, int grade, string effectsJson)
+        {
+            var key = (spell, Math.Max(1, grade));
+            lock (_candado)
+            {
+                _written[key] = effectsJson;
+                _cache.Remove(key);
+                _criticos.Remove(key);
+            }
+        }
+
+        /// <summary>Drops every written row, so the client's are read again (the content reload).</summary>
+        public static void ForgetWritten()
+        {
+            lock (_candado)
+            {
+                foreach (var key in _written.Keys)
+                {
+                    _cache.Remove(key);
+                    _criticos.Remove(key);
+                }
+                _written.Clear();
+            }
         }
 
         public static IReadOnlyList<SpellEffect> De(int hechizo, int grado)
@@ -236,6 +290,13 @@ namespace Jondo.Unity.Server.Managers
 
                 var normales = new List<SpellEffect>();
                 var criticos = new List<SpellEffect>();
+                if (_written.TryGetValue(clave, out string? written))
+                {
+                    Parsear(written, normales, -1);
+                    _cache[clave] = normales;
+                    _criticos[clave] = criticos;
+                    return (normales, criticos);
+                }
                 try
                 {
                     using var conexion = new SqliteConnection(DatabaseManager.WorldConnectionString);

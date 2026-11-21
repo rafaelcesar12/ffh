@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Jondo.Unity.Server.Managers;
 using Jondo.Unity.Server.Network;
 using Jondo.Unity.Protocol;
+using Game = Jondo.Unity.Protocol.Game;
 using Jondo.Unity.World.Content;
 
 namespace Jondo.Unity.Server.Handlers
@@ -91,19 +92,12 @@ namespace Jondo.Unity.Server.Handlers
         /// <summary>
         /// The client has clicked an NPC (iov). Depending on the action, the shop or the dialogue opens.
         /// </summary>
-        public static async Task InteractAsync(NetworkStream stream, byte[] payload)
+        public static async Task InteractAsync(GameSession session, Game.NpcGenericActionRequest request)
         {
-            byte[]? iov = ConnectionProtocol.ReadPayload(payload, Op.Iov);
-            if (iov == null) return;
-
-            long action = 0, mapId = 0, contextualId = 0;
-            foreach (var field in ProtoMessage.Parse(iov).Fields)
-            {
-                if (field.WireType != 0) continue;
-                if (field.FieldNumber == 1) action = field.VarIntValue;
-                else if (field.FieldNumber == 2) mapId = field.VarIntValue;
-                else if (field.FieldNumber == 3) contextualId = field.VarIntValue;
-            }
+            using var context = SessionContext.Push(session);
+            var stream = session.Stream;
+            if (await MarketplaceHandler.ModeAsync(session, request)) return;
+            var (action, mapId, contextualId) = request;
 
             // An alliance's tax collector is talked to with the same iov (action 3, as in «atacar a
             // recaudador y perder») and answers with its own ion.
@@ -139,7 +133,7 @@ namespace Jondo.Unity.Server.Handlers
 
             if (action == Npcs.Talk)
             {
-                await OpenDialogAsync(stream, npc, mapId);
+                await OpenDialogAsync(session, npc, mapId);
                 return;
             }
 
@@ -156,10 +150,12 @@ namespace Jondo.Unity.Server.Handlers
         /// <summary>The whole catalogue, in one go, which is how the real server sends it.</summary>
         private static async Task OpenShopAsync(NetworkStream stream, Npcs.Spawn npc)
         {
-            var catalogue = NpcShops.CatalogueOf(npc.NpcId);
+            var subscribedDays = new Lazy<double>(ShopSubscriptionDays);
+            var catalogue = NpcShops.CatalogueFor(npc.NpcId,
+                criterion => PlayerCriteria.Met(criterion, SessionContext.State.MapId), () => subscribedDays.Value);
             if (catalogue.Count == 0)
             {
-                Console.WriteLine($"[NPC] {npc.NpcId} has a shop action but sells nothing.");
+                Console.WriteLine($"[NPC] {npc.NpcId} has no available shop items.");
                 return;
             }
 
@@ -169,7 +165,7 @@ namespace Jondo.Unity.Server.Handlers
             // If this vendor charges in tokens, the client is told which the currency is. Without
             // this f3 does not travel and the client draws the price in kamas, which is the usual.
             var tokenShop = TokenShops.Of(npc.NpcId);
-            byte[] kbd = ConnectionProtocol.BuildShop(npc.ContextualId, catalogue, tokenShop, ShopHub.UnitPrice(npc.NpcId));
+            byte[] kbd = ConnectionProtocol.BuildShop(npc.ContextualId, catalogue, tokenShop, npc.NpcId, ShopHub.UnitPrice(npc.NpcId));
             await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
                 ConnectionProtocol.Push(Op.Kbd, kbd));
 
@@ -178,6 +174,10 @@ namespace Jondo.Unity.Server.Handlers
                               $"{kbd.Length} bytes, paid in {moneda}.");
         }
 
+        private static double ShopSubscriptionDays()
+            => VeteranRewards.SubscribedDays(DatabaseManager.GetSubscriptionEnd(SessionContext.Current.AccountId),
+                                             DateTimeOffset.UtcNow);
+
         /// <summary>
         /// The dialogue window and its first question.
         ///
@@ -185,8 +185,9 @@ namespace Jondo.Unity.Server.Handlers
         /// says. If not, the usual is done: the template's sentence and ALL its answers at once, which is
         /// what makes Snori Nairb offer thirty-nine.
         /// </summary>
-        private static async Task OpenDialogAsync(NetworkStream stream, Npcs.Spawn npc, long mapId)
+        private static async Task OpenDialogAsync(GameSession session, Npcs.Spawn npc, long mapId)
         {
+            var stream = session.Stream;
             // Is it a luminomachine? Then neither template nor written tree: what it says and what it
             // offers come from the light the floor has and the salt the player carries.
             if (npc.NpcId == Luminomachine.NpcId)
@@ -205,13 +206,12 @@ namespace Jondo.Unity.Server.Handlers
             // Nor Belladona: her chess, its rules or her spite once beaten (GuildRaidEfedra).
             if (npc.NpcId == Managers.GuildRaidEfedra.Npc)
             {
-                await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                    ConnectionProtocol.Push(Op.Ioc, ConnectionProtocol.BuildNpcDialog(mapId, npc.ContextualId)));
+                await session.SendAsync(new Game.NpcDialogCreationEvent(mapId, checked((int)npc.ContextualId)));
                 var (question, replies) = Managers.GuildRaidEfedra.DialogueFor(GameState.CharacterId);
                 SessionContext.State.OpenDialogueNpcId = npc.NpcId;
                 SessionContext.State.OpenDialogueMapId = mapId;
                 SessionContext.State.OpenDialogueMessage = question;
-                await PreguntarAsync(stream, question, replies);
+                await PreguntarAsync(session, question, replies);
                 return;
             }
 
@@ -225,13 +225,12 @@ namespace Jondo.Unity.Server.Handlers
             // Gargandias's altar and the titan himself (GargandiasHandler).
             if (GargandiasHandler.Owns(npc.NpcId))
             {
-                await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                    ConnectionProtocol.Push(Op.Ioc, ConnectionProtocol.BuildNpcDialog(mapId, npc.ContextualId)));
+                await session.SendAsync(new Game.NpcDialogCreationEvent(mapId, checked((int)npc.ContextualId)));
                 var (opening, choices) = GargandiasHandler.Opening(npc.NpcId);
                 SessionContext.State.OpenDialogueNpcId = npc.NpcId;
                 SessionContext.State.OpenDialogueMapId = mapId;
                 SessionContext.State.OpenDialogueMessage = opening;
-                await PreguntarAsync(stream, opening, choices);
+                await PreguntarAsync(session, opening, choices);
                 return;
             }
 
@@ -239,13 +238,12 @@ namespace Jondo.Unity.Server.Handlers
             // character's side, fee and last change (AlignmentHandler).
             if (AlignmentHandler.Owns(npc.NpcId))
             {
-                await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                    ConnectionProtocol.Push(Op.Ioc, ConnectionProtocol.BuildNpcDialog(mapId, npc.ContextualId)));
+                await session.SendAsync(new Game.NpcDialogCreationEvent(mapId, checked((int)npc.ContextualId)));
                 var (question, replies) = AlignmentHandler.Opening(npc.NpcId);
                 SessionContext.State.OpenDialogueNpcId = npc.NpcId;
                 SessionContext.State.OpenDialogueMapId = mapId;
                 SessionContext.State.OpenDialogueMessage = question;
-                await PreguntarAsync(stream, question, replies);
+                await PreguntarAsync(session, question, replies);
                 return;
             }
 
@@ -253,14 +251,13 @@ namespace Jondo.Unity.Server.Handlers
             // (AlmanaxOfferingHandler). Other quests that only ask to come and see him still close.
             if (AlmanaxOfferingHandler.Owns(npc.NpcId))
             {
-                await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                    ConnectionProtocol.Push(Op.Ioc, ConnectionProtocol.BuildNpcDialog(mapId, npc.ContextualId)));
+                await session.SendAsync(new Game.NpcDialogCreationEvent(mapId, checked((int)npc.ContextualId)));
                 var (question, replies, texts) = AlmanaxOfferingHandler.Opening();
                 SessionContext.State.OpenDialogueNpcId = npc.NpcId;
                 SessionContext.State.OpenDialogueMapId = mapId;
                 SessionContext.State.OpenDialogueMessage = question;
-                await PreguntarAsync(stream, question, replies, lineParameters: texts);
-                await Managers.Quests.OnTalkingToAsync(stream, npc.NpcId);
+                await PreguntarAsync(session, question, replies, lineParameters: texts);
+                await Managers.Quests.OnTalkingToAsync(session, npc.NpcId);
                 Console.WriteLine($"[NPC] Dialog of {npc.NpcId}: question {question}, {replies.Length} replies (the Almanax).");
                 return;
             }
@@ -268,7 +265,7 @@ namespace Jondo.Unity.Server.Handlers
             // The Dispensador de favores of a dream favour opens on what the favour is at.
             if (npc.NpcId == Managers.Dreams.FavorNpc)
             {
-                await OpenFavorAsync(stream, npc, mapId);
+                await OpenFavorAsync(session, npc, mapId);
                 return;
             }
 
@@ -279,7 +276,7 @@ namespace Jondo.Unity.Server.Handlers
             // an item handed over on a hello -- is done BEFORE he chooses what to say: the old
             // quests' NPC answers the hand-over with the next step's line straight away (Guemado
             // Elwapo's «Gracias por las patatas» as the sacks change hands).
-            await Managers.Quests.OnTalkingToAsync(stream, npc.NpcId);
+            await Managers.Quests.OnTalkingToAsync(session, npc.NpcId);
 
             var template = Npcs.TemplateOf(npc.NpcId);
             var escrito = NpcDialogues.For(npc.NpcId, mapId);
@@ -291,8 +288,7 @@ namespace Jondo.Unity.Server.Handlers
                 return;
             }
 
-            await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                ConnectionProtocol.Push(Op.Ioc, ConnectionProtocol.BuildNpcDialog(mapId, npc.ContextualId)));
+            await session.SendAsync(new Game.NpcDialogCreationEvent(mapId, checked((int)npc.ContextualId)));
 
             long pregunta = primera?.Message ?? template!.DialogMessageId;
             long[] respuestas = primera != null
@@ -372,7 +368,7 @@ namespace Jondo.Unity.Server.Handlers
             // A sulking NPC's line is no line of his tree: it goes as itself, with the client's own
             // «Marcharte.», not his template's last reply -- Gorco's «¡Yo no hablar a ti!» offered
             // «Tomar el pedazo de papel y darle las gracias al goblin».
-            await PreguntarAsync(stream, pregunta, respuestas, doorOnly && respuestas.Length == 0 ? null : template,
+            await PreguntarAsync(session, pregunta, respuestas, doorOnly && respuestas.Length == 0 ? null : template,
                                  escrito?.Line(pregunta) ?? primera, banker);
 
             Console.WriteLine($"[NPC] Dialog of {npc.NpcId}: question {pregunta}, " +
@@ -401,8 +397,7 @@ namespace Jondo.Unity.Server.Handlers
             // The salt is the raid's pool, not the bag (the guides): what the whole team gathered.
             int salt = (int)Math.Max(0, Managers.GuildRaidManager.SaltOf(GameState.CharacterId));
 
-            await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                ConnectionProtocol.Push(Op.Ioc, ConnectionProtocol.BuildNpcDialog(mapId, npc.ContextualId)));
+            await SessionContext.Current.SendAsync(new Game.NpcDialogCreationEvent(mapId, checked((int)npc.ContextualId)));
 
             long pregunta;
             long[] respuestas;
@@ -422,7 +417,7 @@ namespace Jondo.Unity.Server.Handlers
             SessionContext.State.OpenDialogueMapId = mapId;
             SessionContext.State.OpenDialogueMessage = pregunta;
 
-            await PreguntarAsync(stream, pregunta, respuestas);
+            await PreguntarAsync(SessionContext.Current, pregunta, respuestas);
 
             Console.WriteLine($"[Luminomachines] Floor {floor}, light {light}, {salt} salts: " +
                               $"question {pregunta}, {respuestas.Length} replies.");
@@ -441,10 +436,7 @@ namespace Jondo.Unity.Server.Handlers
         {
             var elegida = Luminomachine.Read(reply);
 
-            CerrarConversacion();
-            await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                ConnectionProtocol.Push(Op.Kld, ConnectionProtocol.BuildDialogClosed(
-                    ConnectionProtocol.NpcDialogCloseReason)));
+            await CloseAsync(SessionContext.Current);
 
             // Not touching it, or going off to look for more salt: both leave without paying anything.
             if (elegida == null || !elegida.Value.Buys) return;
@@ -483,8 +475,7 @@ namespace Jondo.Unity.Server.Handlers
             long score = Managers.RaidChests.ScoreOf(who);
             var traidos = score < 0 ? new Dictionary<int, int>() : Managers.RaidTreasures.InTheBag();
 
-            await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                ConnectionProtocol.Push(Op.Ioc, ConnectionProtocol.BuildNpcDialog(mapId, npc.ContextualId)));
+            await SessionContext.Current.SendAsync(new Game.NpcDialogCreationEvent(mapId, checked((int)npc.ContextualId)));
 
             await PreguntaDelCofreAsync(stream, npc, mapId, score, traidos.Count > 0);
 
@@ -504,7 +495,7 @@ namespace Jondo.Unity.Server.Handlers
             SessionContext.State.OpenDialogueMapId = mapId;
             SessionContext.State.OpenDialogueMessage = RaidChest.Vibrating;
 
-            await PreguntarAsync(stream, RaidChest.Vibrating, respuestas);
+            await PreguntarAsync(SessionContext.Current, RaidChest.Vibrating, respuestas);
         }
 
         /// <summary>
@@ -558,7 +549,7 @@ namespace Jondo.Unity.Server.Handlers
             else if (reply == RaidChest.Approach)
             {
                 SessionContext.State.OpenDialogueMessage = RaidChest.Warning;
-                await PreguntarAsync(stream, RaidChest.Warning, Lista(RaidChest.WarningReplies()));
+                await PreguntarAsync(SessionContext.Current, RaidChest.Warning, Lista(RaidChest.WarningReplies()));
                 return;
             }
             else if (reply == RaidChest.TakeAndRun)
@@ -566,10 +557,7 @@ namespace Jondo.Unity.Server.Handlers
                 var raid = Managers.GuildRaidManager.RaidOf(who);
                 int cual = raid?.RaidId ?? 0;
 
-                CerrarConversacion();
-                await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                    ConnectionProtocol.Push(Op.Kld, ConnectionProtocol.BuildDialogClosed(
-                        ConnectionProtocol.NpcDialogCloseReason)));
+                await CloseAsync(SessionContext.Current);
 
                 // The Gigalodón comes out for whoever takes the chest (the guides); the raid ends
                 // with its fight. Only where there is no Gigalodón to fight does taking it end the raid.
@@ -589,10 +577,7 @@ namespace Jondo.Unity.Server.Handlers
                 return;
             }
 
-            CerrarConversacion();
-            await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                ConnectionProtocol.Push(Op.Kld, ConnectionProtocol.BuildDialogClosed(
-                    ConnectionProtocol.NpcDialogCloseReason)));
+            await CloseAsync(SessionContext.Current);
         }
 
         /// <summary>
@@ -604,14 +589,13 @@ namespace Jondo.Unity.Server.Handlers
         /// </remarks>
         private static async Task OpenMasterAsync(NetworkStream stream, Npcs.Spawn npc, long mapId)
         {
-            await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                ConnectionProtocol.Push(Op.Ioc, ConnectionProtocol.BuildNpcDialog(mapId, npc.ContextualId)));
+            await SessionContext.Current.SendAsync(new Game.NpcDialogCreationEvent(mapId, checked((int)npc.ContextualId)));
 
             SessionContext.State.OpenDialogueNpcId = npc.NpcId;
             SessionContext.State.OpenDialogueMapId = mapId;
             SessionContext.State.OpenDialogueMessage = Kanojedo.FirstMessage;
 
-            await PreguntarAsync(stream, Kanojedo.FirstMessage, Lista(Kanojedo.LevelReplies));
+            await PreguntarAsync(SessionContext.Current, Kanojedo.FirstMessage, Lista(Kanojedo.LevelReplies));
             Console.WriteLine($"[Kanojedo] The master of map {mapId} offers his six levels.");
         }
 
@@ -622,21 +606,20 @@ namespace Jondo.Unity.Server.Handlers
         /// with no reply but the client's own way out. The lines and their replies are his
         /// template's; which goes with which is the tree in content/npcs/dialogues.json.
         /// </summary>
-        private static async Task OpenFavorAsync(NetworkStream stream, Npcs.Spawn npc, long mapId)
+        private static async Task OpenFavorAsync(GameSession session, Npcs.Spawn npc, long mapId)
         {
             var escrito = NpcDialogues.For(npc.NpcId, mapId);
-            long pregunta = DreamHandler.FavorPending() ? Managers.Dreams.FavorOfferMessage : Managers.Dreams.FavorGivenMessage;
+            long pregunta = DreamHandler.FavorPending(session.CharacterId) ? Managers.Dreams.FavorOfferMessage : Managers.Dreams.FavorGivenMessage;
             var linea = escrito?.Line(pregunta);
             long[] respuestas = linea != null ? LasQueTocan(linea) : Array.Empty<long>();
 
-            await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                ConnectionProtocol.Push(Op.Ioc, ConnectionProtocol.BuildNpcDialog(mapId, npc.ContextualId)));
+            await session.SendAsync(new Game.NpcDialogCreationEvent(mapId, checked((int)npc.ContextualId)));
 
-            SessionContext.State.OpenDialogueNpcId = npc.NpcId;
-            SessionContext.State.OpenDialogueMapId = mapId;
-            SessionContext.State.OpenDialogueMessage = pregunta;
+            session.State.OpenDialogueNpcId = npc.NpcId;
+            session.State.OpenDialogueMapId = mapId;
+            session.State.OpenDialogueMessage = pregunta;
 
-            await PreguntarAsync(stream, pregunta, respuestas, null, linea);
+            await PreguntarAsync(session, pregunta, respuestas, null, linea);
             Console.WriteLine($"[Dreams] The Dispensador de favores says {pregunta}, {respuestas.Length} replies.");
         }
 
@@ -666,23 +649,18 @@ namespace Jondo.Unity.Server.Handlers
                 }
 
                 SessionContext.State.OpenDialogueMessage = Kanojedo.MessageFor(nivel);
-                await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                    ConnectionProtocol.Push(Op.Ios,
-                        ConnectionProtocol.BuildNpcQuestion(Kanojedo.MessageFor(nivel), Lista(cuentas), parametros)));
+                await SendQuestionAsync(SessionContext.Current, Kanojedo.MessageFor(nivel), Lista(cuentas), parametros);
                 return;
             }
 
             if (Kanojedo.IsBack(reply))
             {
                 SessionContext.State.OpenDialogueMessage = Kanojedo.FirstMessage;
-                await PreguntarAsync(stream, Kanojedo.FirstMessage, Lista(Kanojedo.LevelReplies));
+                await PreguntarAsync(SessionContext.Current, Kanojedo.FirstMessage, Lista(Kanojedo.LevelReplies));
                 return;
             }
 
-            CerrarConversacion();
-            await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                ConnectionProtocol.Push(Op.Kld, ConnectionProtocol.BuildDialogClosed(
-                    ConnectionProtocol.NpcDialogCloseReason)));
+            await CloseAsync(SessionContext.Current);
 
             var pedido = Kanojedo.ReadCount(reply);
             if (pedido == null) return;
@@ -738,7 +716,7 @@ namespace Jondo.Unity.Server.Handlers
         /// answer with the kld that closes. It is here and not in the two places that ask because now
         /// there are two: the first sentence and each of the ones that follow.
         /// </remarks>
-        private static async Task PreguntarAsync(NetworkStream stream, long pregunta, long[] respuestas,
+        private static async Task PreguntarAsync(GameSession session, long pregunta, long[] respuestas,
                                                  Npcs.Template? plantilla = null,
                                                  Jondo.Unity.World.Content.DialogueLine? frase = null,
                                                  Bankers.Banker? banker = null,
@@ -766,10 +744,7 @@ namespace Jondo.Unity.Server.Handlers
             // «Aceptar el trato» to a Xelor with her cards still to find. Its #1 still goes with it.
             if (respuestas.Length == 0 && frase != null)
             {
-                await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                    ConnectionProtocol.Push(Op.Ios, lineParameters is { Count: > 0 }
-                        ? ConnectionProtocol.BuildNpcQuestion(pregunta, Array.Empty<long>(), null, lineParameters)
-                        : ConnectionProtocol.BuildNpcQuestion(pregunta, Array.Empty<long>())));
+                await SendQuestionAsync(session, pregunta, [], lineParameters: lineParameters);
                 return;
             }
 
@@ -788,9 +763,7 @@ namespace Jondo.Unity.Server.Handlers
 
             if (respuestas.Length == 0)
             {
-                await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                    ConnectionProtocol.Push(Op.Ios, ConnectionProtocol.BuildNpcQuestion(pregunta,
-                        Array.Empty<long>())));
+                await SendQuestionAsync(session, pregunta, []);
                 return;
             }
 
@@ -821,18 +794,30 @@ namespace Jondo.Unity.Server.Handlers
                 parametros ??= new Dictionary<long, IReadOnlyList<long>>();
                 parametros[banker.Consult] = BankHandler.ConsultReplyEffects;
 
-                await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                    ConnectionProtocol.Push(Op.Ios, BankProtocol.BuildQuestion(pregunta, respuestas, parametros,
-                        BankHandler.GreetingParameters(SessionContext.Current.AccountId))));
-                return;
+                lineParameters = BankHandler.GreetingParameters(session.AccountId);
             }
 
             // A line that names somebody -- «Haré esta ofrenda en tu nombre, #1» -- carries the name,
             // and its replies keep what their effects act on (the quest a «?» reply starts).
-            byte[] ios = lineParameters is { Count: > 0 }
-                ? ConnectionProtocol.BuildNpcQuestion(pregunta, respuestas, parametros, lineParameters, arguments)
-                : ConnectionProtocol.BuildNpcQuestion(pregunta, respuestas, parametros, arguments);
-            await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream, ConnectionProtocol.Push(Op.Ios, ios));
+            await SendQuestionAsync(session, pregunta, respuestas, parametros, arguments, lineParameters);
+        }
+
+        private static Task SendQuestionAsync(GameSession session, long question, long[] replies,
+            IReadOnlyDictionary<long, IReadOnlyList<long>>? effects = null,
+            IReadOnlyDictionary<long, IReadOnlyList<IReadOnlyList<long>>>? arguments = null,
+            IReadOnlyList<string>? lineParameters = null)
+        {
+            Game.VisibleReply Visible(long reply)
+            {
+                if (effects == null || !effects.TryGetValue(reply, out var ids)) return new(checked((int)reply), []);
+                IReadOnlyList<IReadOnlyList<long>>? args = null;
+                arguments?.TryGetValue(reply, out args);
+                return new(checked((int)reply), ids.Select((id, i) => new Game.ActionInformation(checked((int)id),
+                    args != null && i < args.Count ? args[i].Select(n => checked((int)n)).ToArray() : [])).ToArray());
+            }
+            session.State.LastNpcQuestion = question;
+            session.State.LastNpcReplies = replies.ToList();
+            return session.SendAsync(new Game.NpcDialogQuestionEvent(checked((int)question), replies.Select(Visible).ToArray(), lineParameters ?? []));
         }
 
         /// <summary>The whole hours, rounded up, until the next daily turn (QuestResets), at least one.</summary>
@@ -854,7 +839,7 @@ namespace Jondo.Unity.Server.Handlers
         /// It comes up 192 times in the 401 captures and always empty: it does not say which NPC it comes
         /// from, so whatever was open is closed, which is the only thing there can be.
         /// </remarks>
-        public static Task CloseAsync(NetworkStream stream, byte[] payload) => CloseAsync(stream);
+        public static Task CloseAsync(NetworkStream stream) => CloseAsync(SessionContext.Current);
 
         /// <summary>
         /// Closes the open conversation, without needing a message from the client.
@@ -868,13 +853,11 @@ namespace Jondo.Unity.Server.Handlers
         /// Any place that ends the conversation on its own needs it, like a dungeon guardian who accepts
         /// the key and puts you inside.
         /// </remarks>
-        public static async Task CloseAsync(NetworkStream stream)
+        public static Task CloseAsync(GameSession session)
         {
+            using var context = SessionContext.Push(session);
             CerrarConversacion();
-
-            await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                ConnectionProtocol.Push(Op.Kld, ConnectionProtocol.BuildDialogClosed(
-                    ConnectionProtocol.NpcDialogCloseReason)));
+            return session.SendAsync(new Game.DialogLeaveEvent(Game.DialogType.DialogDialog));
         }
 
         /// <summary>
@@ -922,8 +905,10 @@ namespace Jondo.Unity.Server.Handlers
         /// guided tutorial's voice presents the class's god as soon as the first steps are walked.
         /// The capture has idz 3226 and then, with no iov between, ioc and ios 60333.
         /// </summary>
-        public static async Task PushAfterStepAsync(NetworkStream stream, int stepId)
+        public static async Task PushAfterStepAsync(GameSession session, int stepId)
         {
+            using var context = SessionContext.Push(session);
+            var stream = session.Stream;
             long mapId = SessionContext.State.MapId;
             foreach (var puesto in Npcs.Of(mapId))
             {
@@ -938,14 +923,13 @@ namespace Jondo.Unity.Server.Handlers
                     var line = escrito.Line(message) ?? new DialogueLine { Message = message };
 
                     // The stagings around the line: the tutorial's camera on the god's statue.
-                    await Managers.MapStagings.PlayAsync(stream, push.StagingsBefore);
-                    await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                        ConnectionProtocol.Push(Op.Ioc, ConnectionProtocol.BuildNpcDialog(mapId, puesto.ContextualId)));
+                    await Managers.MapStagings.PlayAsync(session, push.StagingsBefore);
+                    await session.SendAsync(new Game.NpcDialogCreationEvent(mapId, checked((int)puesto.ContextualId)));
                     SessionContext.State.OpenDialogueNpcId = puesto.NpcId;
                     SessionContext.State.OpenDialogueMapId = mapId;
                     SessionContext.State.OpenDialogueMessage = message;
-                    await PreguntarAsync(stream, message, LasQueTocan(line), Npcs.TemplateOf(puesto.NpcId), line);
-                    await Managers.MapStagings.PlayAsync(stream, push.Stagings);
+                    await PreguntarAsync(session, message, LasQueTocan(line), Npcs.TemplateOf(puesto.NpcId), line);
+                    await Managers.MapStagings.PlayAsync(session, push.Stagings);
                     Console.WriteLine($"[NPC] {puesto.NpcId} speaks after step {stepId}: question {message}.");
                     return;
                 }
@@ -957,25 +941,27 @@ namespace Jondo.Unity.Server.Handlers
         /// Ganymed does in the combat room once Master Darmas has been told the fight is won.
         /// </summary>
         /// <summary>Whoever a reply brings in: its «showsNpc» and the «alsoShows» with it.</summary>
-        private static async Task ComeInAsync(NetworkStream stream, DialogueChoice choice)
+        private static async Task ComeInAsync(DialogueChoice choice)
         {
-            await ComesInAsync(stream, choice.ShowsNpc);
-            foreach (int npc in choice.AlsoShows) await ComesInAsync(stream, npc);
+            var session = SessionContext.Current;
+            await ComesInAsync(session, choice.ShowsNpc);
+            foreach (int npc in choice.AlsoShows) await ComesInAsync(session, npc);
         }
 
         /// <summary>An NPC of this map comes in, for this character (jsn), without a word.</summary>
-        public static async Task ComesInAsync(NetworkStream stream, int npcId)
+        public static async Task ComesInAsync(GameSession session, int npcId)
         {
-            long mapId = SessionContext.State.MapId;
+            using var context = SessionContext.Push(session);
+            long mapId = session.MapId;
             var spawn = Npcs.OnMap(mapId).FirstOrDefault(s => s.NpcId == npcId);
             if (spawn == null) return;
-            await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                ConnectionProtocol.Push(Op.Jsn, ConnectionProtocol.BuildNpcShown(spawn, mapId)));
+            await session.SendAsync(MapActorMessages.NpcShown(spawn, mapId));
         }
 
-        private static async Task ComesInAndSpeaksAsync(NetworkStream stream, int npcId, long thenLine = 0)
+        private static async Task ComesInAndSpeaksAsync(GameSession session, int npcId, long thenLine = 0)
         {
-            long mapId = SessionContext.State.MapId;
+            var stream = session.Stream;
+            long mapId = session.MapId;
             // Coming in is appearing: one who hides until then (Ramy in the conduits of the palace's
             // kitchen) stands on the map for nobody before his entrance.
             var spawn = Npcs.OnMap(mapId).FirstOrDefault(s => s.NpcId == npcId)
@@ -986,20 +972,18 @@ namespace Jondo.Unity.Server.Handlers
                 return;
             }
 
-            await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                ConnectionProtocol.Push(Op.Jsn, ConnectionProtocol.BuildNpcShown(spawn, mapId)));
+            await session.SendAsync(MapActorMessages.NpcShown(spawn, mapId));
 
             var escrito = NpcDialogues.For(npcId, mapId);
             var line = escrito == null ? null : thenLine != 0 ? escrito.Line(thenLine) : OpeningFor(escrito);
             if (line == null) return;
 
-            await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                ConnectionProtocol.Push(Op.Ioc, ConnectionProtocol.BuildNpcDialog(mapId, spawn.ContextualId)));
+            await session.SendAsync(new Game.NpcDialogCreationEvent(mapId, checked((int)spawn.ContextualId)));
             SessionContext.State.OpenDialogueNpcId = npcId;
             SessionContext.State.OpenDialogueMapId = mapId;
             SessionContext.State.OpenDialogueMessage = line.Message;
-            await PreguntarAsync(stream, line.Message, LasQueTocan(line), Npcs.TemplateOf(npcId), line);
-            await Managers.Quests.OnTalkingToAsync(stream, npcId);
+            await PreguntarAsync(session, line.Message, LasQueTocan(line), Npcs.TemplateOf(npcId), line);
+            await Managers.Quests.OnTalkingToAsync(session, npcId);
             Console.WriteLine($"[NPC] {npcId} comes in and speaks: question {line.Message}.");
         }
 
@@ -1230,6 +1214,66 @@ namespace Jondo.Unity.Server.Handlers
             }
         }
 
+        private static bool CanShareQuestReply(int npcId, DialogueChoice choice)
+            => Quests.CanShareNpc(npcId) && choice.BuysItem == 0 && choice.BuysPrice == 0
+               && choice.Takes == 0 && choice.TakesAll.Count == 0 && choice.Marks == 0
+               && choice.Door.Length == 0 && choice.TeleportsTo == 0 && choice.TeleportPassage == 0
+               && !choice.ReturnsHome && SeLeOfrece(choice);
+
+        private static async Task StartQuestFromReplyAsync(GameSession session, int npcId, DialogueChoice choice)
+        {
+            bool started = await Quests.StartAsync(session, choice.StartsQuest);
+            bool completed = choice.Completes != 0
+                && await Quests.CompleteByReplyAsync(session, choice.StartsQuest, choice.Completes);
+            if (!started) return;
+
+            await Heroes.ShareQuestActionAsync(async hero =>
+            {
+                if (!CanShareQuestReply(npcId, choice) || !await Quests.StartAsync(hero, choice.StartsQuest)) return;
+
+                await GiveFromReplyAsync(hero.Stream!, choice);
+                if (completed)
+                {
+                    int stepId = Quests.Book?.Of(choice.StartsQuest)?.Steps.FirstOrDefault()?.Id ?? 0;
+                    if (Quests.SharedObjective(choice.StartsQuest, stepId, choice.Completes, out _))
+                        await Quests.CompleteByReplyAsync(hero, choice.StartsQuest, choice.Completes);
+                }
+            },
+            quests: new[] { choice.StartsQuest },
+            explain: hero => !CanShareQuestReply(npcId, choice)
+                ? new Heroes.LagCause(Heroes.QuestLagReason.NotShared)
+                : Heroes.CouldNotStart(hero, choice.StartsQuest));
+        }
+
+        private static async Task<bool> CompleteQuestFromReplyAsync(GameSession session, int npcId, DialogueChoice choice,
+                                                                    int objectiveId, bool giveFromReply = false)
+        {
+            var book = Quests.Book;
+            var objective = book?.Objective(objectiveId);
+            var step = objective == null ? null : book!.Step(objective.StepId);
+            // What the heroes following lack, out of the team's bags first; all of them or nobody.
+            if (step != null && objective!.ItemId != 0 && objective.ConsumesItems
+                && Quests.SharedObjective(step.QuestId, step.Id, objectiveId, out _)
+                && !await HeroQuestItems.PoolAsync(session, new[] { (objective.ItemId, objective.ItemCount) },
+                    hero => CanShareQuestReply(npcId, choice) && Quests.SharedObjective(step.QuestId, step.Id, objectiveId, out _)))
+                return false;
+            if (!await Quests.CompleteByReplyAsync(session, choice.Quest, objectiveId)) return false;
+            if (step == null) return true;
+
+            await Heroes.ShareQuestActionAsync(async hero =>
+            {
+                if (!CanShareQuestReply(npcId, choice) || !Quests.SharedObjective(step.QuestId, step.Id, objectiveId, out _))
+                    return;
+                if (await Quests.CompleteByReplyAsync(hero, step.QuestId, objectiveId) && giveFromReply)
+                    await GiveFromReplyAsync(hero.Stream!, choice);
+            },
+            quests: new[] { step.QuestId },
+            explain: hero => !CanShareQuestReply(npcId, choice)
+                ? new Heroes.LagCause(Heroes.QuestLagReason.NotShared)
+                : Quests.MissingFor(hero, objective!));
+            return true;
+        }
+
         /// <summary>There stops being an open conversation.</summary>
         private static void CerrarConversacion()
         {
@@ -1246,16 +1290,11 @@ namespace Jondo.Unity.Server.Handlers
         /// The dialogue always closes, accepted or refused: the kld goes out all four times in the capture
         /// and goes AHEAD of the kamas.
         /// </summary>
-        public static async Task ReplyAsync(NetworkStream stream, byte[] payload)
+        public static async Task ReplyAsync(GameSession session, Game.NpcDialogReplyRequest request)
         {
-            byte[]? ioy = ConnectionProtocol.ReadPayload(payload, Op.Ioy);
-            if (ioy == null) return;
-
-            long reply = 0;
-            foreach (var field in ProtoMessage.Parse(ioy).Fields)
-            {
-                if (field.FieldNumber == 1 && field.WireType == 0) reply = field.VarIntValue;
-            }
+            using var context = SessionContext.Push(session);
+            var stream = session.Stream;
+            long reply = request.ReplyId;
 
             if (await DungeonHandler.TryResumeAsync(stream, reply)) return;
 
@@ -1291,22 +1330,20 @@ namespace Jondo.Unity.Server.Handlers
                 // And what the reply does besides, before the fight takes the character away: «Ve a
                 // ver a Klaus Konbah» is done by choosing to defend oneself.
                 if (fightChoice != null && fightChoice.Completes != 0)
-                    await Managers.Quests.CompleteByReplyAsync(stream, fightChoice.Quest, fightChoice.Completes);
+                    await Managers.Quests.CompleteByReplyAsync(session, fightChoice.Quest, fightChoice.Completes);
                 // And the quest it hands over, first: the prince of Wey's «À votre service» starts
                 // «Le Pwince Monseigneuw» and the fight against the fat tofu at once, and the fight's
                 // first objective has to be in hand when the fight ends.
                 if (fightChoice != null && fightChoice.StartsQuest != 0)
-                    await Managers.Quests.StartAsync(stream, fightChoice.StartsQuest);
+                    await Managers.Quests.StartAsync(session, fightChoice.StartsQuest);
                 // Or the quest it ends there and then, with nothing paid: Gobatchef's goblins called
                 // in for whoever sides with the bworks.
                 if (fightChoice != null && fightChoice.Forfeits != 0)
-                    await Managers.Quests.ForfeitAsync(stream, fightChoice.Forfeits);
+                    await Managers.Quests.ForfeitAsync(session, fightChoice.Forfeits);
                 // And its stagings: the tutorial's camera on the Celestial Puch.
                 if (fightChoice != null && fightChoice.Stagings.Count > 0)
-                    await Managers.MapStagings.PlayAsync(stream, fightChoice.Stagings);
-                CerrarConversacion();
-                await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                    ConnectionProtocol.Push(Op.Kld, ConnectionProtocol.BuildDialogClosed(ConnectionProtocol.NpcDialogCloseReason)));
+                    await Managers.MapStagings.PlayAsync(session, fightChoice.Stagings);
+                await CloseAsync(session);
                 var monsters = npcFight.ByLevel
                     ? npcFight.Monsters.Select(m => (m.Monster, MobSpawnManager.GradeForLevel(m.Monster, SessionContext.State.CharacterLevel))).ToList()
                     : npcFight.Monsters;
@@ -1325,7 +1362,7 @@ namespace Jondo.Unity.Server.Handlers
                     alliesMustLive: npcFight.AlliesMustLive,
                     winMapId: npcFight.WinMapId, winCellId: npcFight.WinCellId, winMarks: npcFight.Marks,
                     alliesPlayedBy: npcFight.AlliesPlayed ? GameState.CharacterId : 0,
-                    defeatFree: npcFight.DefeatFree);
+                    defeatFree: npcFight.DefeatFree, solo: npcFight.Solo);
                 // Taken by the fight when it was built; one that did not start leaves none for the next.
                 FightHandler.TakeNextIncarnation(GameState.CharacterId);
                 FightHandler.TakeNextWaves(GameState.CharacterId);
@@ -1349,12 +1386,10 @@ namespace Jondo.Unity.Server.Handlers
                 {
                     var (question, replies) = await Managers.GuildRaidEfedra.RulesAsync(GameState.CharacterId);
                     SessionContext.State.OpenDialogueMessage = question;
-                    await PreguntarAsync(stream, question, replies);
+                    await PreguntarAsync(session, question, replies);
                     return;
                 }
-                CerrarConversacion();
-                await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                    ConnectionProtocol.Push(Op.Kld, ConnectionProtocol.BuildDialogClosed(ConnectionProtocol.NpcDialogCloseReason)));
+                await CloseAsync(session);
                 if (reply == Managers.GuildRaidEfedra.Challenge)
                     await Managers.GuildRaidEfedra.ChallengeAsync(stream, GameState.CharacterId);
                 return;
@@ -1381,14 +1416,12 @@ namespace Jondo.Unity.Server.Handlers
                 var (sentence, choices, then) = await GargandiasHandler.ReplyAsync(stream, SessionContext.State.OpenDialogueNpcId, reply);
                 if (sentence == 0)
                 {
-                    CerrarConversacion();
-                    await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                        ConnectionProtocol.Push(Op.Kld, ConnectionProtocol.BuildDialogClosed(ConnectionProtocol.NpcDialogCloseReason)));
+                    await CloseAsync(session);
                     if (then is { } where) await TeleportHandler.ToMapAsync(stream, where.Map, where.Cell);
                     return;
                 }
                 SessionContext.State.OpenDialogueMessage = sentence;
-                await PreguntarAsync(stream, sentence, choices);
+                    await PreguntarAsync(session, sentence, choices);
                 return;
             }
 
@@ -1398,13 +1431,11 @@ namespace Jondo.Unity.Server.Handlers
                 var (question, replies) = await AlignmentHandler.ReplyAsync(stream, SessionContext.State.OpenDialogueNpcId, reply);
                 if (question == 0)
                 {
-                    CerrarConversacion();
-                    await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                        ConnectionProtocol.Push(Op.Kld, ConnectionProtocol.BuildDialogClosed(ConnectionProtocol.NpcDialogCloseReason)));
+                    await CloseAsync(session);
                     return;
                 }
                 SessionContext.State.OpenDialogueMessage = question;
-                await PreguntarAsync(stream, question, replies);
+                    await PreguntarAsync(session, question, replies);
                 return;
             }
 
@@ -1414,13 +1445,11 @@ namespace Jondo.Unity.Server.Handlers
                 var (question, replies, texts) = await AlmanaxOfferingHandler.ReplyAsync(stream, reply);
                 if (question == 0)
                 {
-                    CerrarConversacion();
-                    await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                        ConnectionProtocol.Push(Op.Kld, ConnectionProtocol.BuildDialogClosed(ConnectionProtocol.NpcDialogCloseReason)));
+                    await CloseAsync(session);
                     return;
                 }
                 SessionContext.State.OpenDialogueMessage = question;
-                await PreguntarAsync(stream, question, replies, lineParameters: texts);
+                    await PreguntarAsync(session, question, replies, lineParameters: texts);
                 return;
             }
 
@@ -1432,13 +1461,11 @@ namespace Jondo.Unity.Server.Handlers
             {
                 if (next.Question == 0)
                 {
-                    CerrarConversacion();
-                    await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                        ConnectionProtocol.Push(Op.Kld, ConnectionProtocol.BuildDialogClosed(ConnectionProtocol.NpcDialogCloseReason)));
+                    await CloseAsync(session);
                     return;
                 }
                 SessionContext.State.OpenDialogueMessage = next.Question;
-                await PreguntarAsync(stream, next.Question, next.Replies);
+                    await PreguntarAsync(session, next.Question, next.Replies);
                 return;
             }
 
@@ -1466,11 +1493,8 @@ namespace Jondo.Unity.Server.Handlers
                 var exitChoice = NpcDialogues.For(dialogueState.OpenDialogueNpcId, dialogueState.OpenDialogueMapId)
                                              ?.Line(dialogueState.OpenDialogueMessage)?.Choice(reply, SeLeOfrece);
                 if (exitChoice != null && exitChoice.Completes != 0 && SeLeOfrece(exitChoice))
-                    await Managers.Quests.CompleteByReplyAsync(stream, exitChoice.Quest, exitChoice.Completes);
-                CerrarConversacion();
-                await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                    ConnectionProtocol.Push(Op.Kld, ConnectionProtocol.BuildDialogClosed(
-                        ConnectionProtocol.NpcDialogCloseReason)));
+                    await Managers.Quests.CompleteByReplyAsync(session, exitChoice.Quest, exitChoice.Completes);
+                await CloseAsync(session);
                 await TeleportHandler.ToMapAsync(stream, dungeonExit);
                 return;
             }
@@ -1528,7 +1552,7 @@ namespace Jondo.Unity.Server.Handlers
                         return;
                     }
                     SessionContext.State.OpenDialogueMessage = falta.Message;
-                    await PreguntarAsync(stream, falta.Message, LasQueTocan(falta),
+                    await PreguntarAsync(session, falta.Message, LasQueTocan(falta),
                                          Npcs.TemplateOf(SessionContext.State.OpenDialogueNpcId), falta);
                     Console.WriteLine($"[NPC] Reply {reply}: something to hand over is missing; line {falta.Message}.");
                     return;
@@ -1560,17 +1584,14 @@ namespace Jondo.Unity.Server.Handlers
                 if (unpaidLine != null)
                 {
                     SessionContext.State.OpenDialogueMessage = unpaidLine.Message;
-                    await PreguntarAsync(stream, unpaidLine.Message, LasQueTocan(unpaidLine),
+                    await PreguntarAsync(session, unpaidLine.Message, LasQueTocan(unpaidLine),
                                          Npcs.TemplateOf(SessionContext.State.OpenDialogueNpcId), unpaidLine);
                     Console.WriteLine($"[NPC] Reply {reply}: not enough kamas; line {unpaidLine.Message}.");
                     return;
                 }
                 if (sinPagar)
                 {
-                    CerrarConversacion();
-                    await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                        ConnectionProtocol.Push(Op.Kld, ConnectionProtocol.BuildDialogClosed(
-                            ConnectionProtocol.NpcDialogCloseReason)));
+                    await CloseAsync(session);
                     return;
                 }
             }
@@ -1579,7 +1600,7 @@ namespace Jondo.Unity.Server.Handlers
             // of its own: it is this same dialogue, and what it buys is written in the answer.
             if (elegidaAhora != null && elegidaAhora.DreamPointsPercent != 0)
             {
-                var sueno = Managers.Dreams.De(GameState.CharacterId);
+                var sueno = Managers.Dreams.De(session.CharacterId);
                 var aqui = sueno?.SalaActual;
                 if (sueno != null && aqui != null && aqui.FavorTaken)
                 {
@@ -1600,7 +1621,7 @@ namespace Jondo.Unity.Server.Handlers
                                       $"({elegidaAhora.DreamPointsPercent}%).");
 
                     DreamHandler.Persist(sueno);
-                    await DreamHandler.RefrescarEstadoAsync(stream);
+                    await DreamHandler.RefrescarEstadoAsync(session);
                 }
                 else
                 {
@@ -1613,11 +1634,8 @@ namespace Jondo.Unity.Server.Handlers
             // the dream's shop window. See DreamHandler.OfferFavorAsync.
             if (elegidaAhora != null && elegidaAhora.DreamFavor)
             {
-                CerrarConversacion();
-                await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                    ConnectionProtocol.Push(Op.Kld, ConnectionProtocol.BuildDialogClosed(
-                        ConnectionProtocol.NpcDialogCloseReason)));
-                await DreamHandler.OfferFavorAsync(stream);
+                await CloseAsync(session);
+                await DreamHandler.OfferFavorAsync(session);
                 return;
             }
 
@@ -1626,11 +1644,8 @@ namespace Jondo.Unity.Server.Handlers
             // It ends the conversation and is done (DreamHandler.GoblinPowerAsync).
             if (elegidaAhora != null && DreamHandler.CarriesGoblinPower(elegidaAhora.Parameters))
             {
-                CerrarConversacion();
-                await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                    ConnectionProtocol.Push(Op.Kld, ConnectionProtocol.BuildDialogClosed(
-                        ConnectionProtocol.NpcDialogCloseReason)));
-                await DreamHandler.GoblinPowerAsync(stream, elegidaAhora.Parameters);
+                await CloseAsync(session);
+                await DreamHandler.GoblinPowerAsync(session, elegidaAhora.Parameters);
                 return;
             }
 
@@ -1651,16 +1666,17 @@ namespace Jondo.Unity.Server.Handlers
             // A reply that does a conversation objective: before the next line when it goes on,
             // after the window closes when it ends it -- «He neutralizado a la rata.» is kld, then
             // lqn 56 and ied 1633 in the capture.
+            int questNpcId = SessionContext.State.OpenDialogueNpcId;
             int completesAfterClosing = 0;
             if (elegidaAhora != null && elegidaAhora.Completes != 0 && elegidaAhora.StartsQuest == 0 && !sinPagar)
             {
                 if (elegidaAhora.Ends && elegidaAhora.TeleportsTo == 0 && elegidaAhora.TeleportPassage == 0)
                     completesAfterClosing = elegidaAhora.Completes;
-                else if (await Managers.Quests.CompleteByReplyAsync(stream, elegidaAhora.Quest, elegidaAhora.Completes))
+                else if (await CompleteQuestFromReplyAsync(session, questNpcId, elegidaAhora, elegidaAhora.Completes, giveFromReply: true))
                 {
                     await GiveFromReplyAsync(stream, elegidaAhora);
                     // And whoever comes in as it is said (Abel Hoz at the bank).
-                    if (elegidaAhora.ShowsNpc != 0) await ComeInAsync(stream, elegidaAhora);
+                    if (elegidaAhora.ShowsNpc != 0) await ComeInAsync(elegidaAhora);
                 }
             }
             else if (elegidaAhora != null && (elegidaAhora.Gives != 0 || elegidaAhora.AlsoGives.Count > 0
@@ -1673,7 +1689,7 @@ namespace Jondo.Unity.Server.Handlers
             if (elegidaAhora != null && elegidaAhora.CompletesAll.Count > 0 && elegidaAhora.StartsQuest == 0 && !sinPagar)
             {
                 foreach (int objective in elegidaAhora.CompletesAll)
-                    await Managers.Quests.CompleteByReplyAsync(stream, elegidaAhora.Quest, objective);
+                    await CompleteQuestFromReplyAsync(session, questNpcId, elegidaAhora, objective);
             }
 
             // What the reply prints in the chat: the orbalantir's visions, its figures turned wrong.
@@ -1688,13 +1704,13 @@ namespace Jondo.Unity.Server.Handlers
             // Somebody who comes in on a reply that does no objective: Vey Gana's «Darle los
             // ingredientes.» draws the country doll out of the barn.
             if (elegidaAhora != null && elegidaAhora.Completes == 0 && elegidaAhora.ShowsNpc != 0)
-                await ComeInAsync(stream, elegidaAhora);
+                await ComeInAsync(elegidaAhora);
 
             int startsAfterClosing = 0;
             // A quest the reply ends there and then, with nothing paid: the goblin sold to the mulou of
             // «Titi Gobelait le magobelin».
             if (elegidaAhora != null && elegidaAhora.Forfeits != 0 && !sinPagar)
-                await Managers.Quests.ForfeitAsync(stream, elegidaAhora.Forfeits);
+                await Managers.Quests.ForfeitAsync(session, elegidaAhora.Forfeits);
 
             if (elegidaAhora != null && elegidaAhora.StartsQuest != 0)
             {
@@ -1703,19 +1719,17 @@ namespace Jondo.Unity.Server.Handlers
                 if (closesHere) startsAfterClosing = elegidaAhora.StartsQuest;
                 else
                 {
-                    await Managers.Quests.StartAsync(stream, elegidaAhora.StartsQuest);
-                    // And its first objective, when it is talking to whoever hands it over.
-                    if (elegidaAhora.Completes != 0)
-                        await Managers.Quests.CompleteByReplyAsync(stream, elegidaAhora.StartsQuest, elegidaAhora.Completes);
+                    await StartQuestFromReplyAsync(session, questNpcId, elegidaAhora);
                 }
             }
             else if (frase == null)
             {
-                await Managers.Quests.OnReplyAsync(stream, SessionContext.State.OpenDialogueMessage);
+                await Managers.Quests.OnReplyAsync(session, SessionContext.State.OpenDialogueMessage);
             }
 
             // And an objective that is this very reply: Noken wishing the character luck.
-            await Managers.Quests.OnReplyChosenAsync(stream, reply);
+            await Managers.Quests.OnReplyChosenAsync(session, reply,
+                () => elegidaAhora == null ? Quests.CanShareNpc(questNpcId) : CanShareQuestReply(questNpcId, elegidaAhora));
 
             // And does this NPC guard a dungeon's door? If he goes in, the conversation has ended in a
             // map change and there is nothing more to tell him.
@@ -1727,7 +1741,7 @@ namespace Jondo.Unity.Server.Handlers
                 if (elegidaAhora != null && elegidaAhora.Door.Length > 0 && elegidaAhora.TakesAll.Count > 0)
                     await TakeAllAsync(stream, elegidaAhora);
                 // Going in can be what hands a quest over: Klasmor's «Criptología».
-                if (startsAfterClosing != 0) await Managers.Quests.StartAsync(stream, startsAfterClosing);
+                if (startsAfterClosing != 0) await Managers.Quests.StartAsync(session, startsAfterClosing);
                 return;
             }
 
@@ -1736,7 +1750,7 @@ namespace Jondo.Unity.Server.Handlers
             // The stagings the reply plays (MapStagings): the tutorial's path to the next island
             // on «Ver cómo se materializa un camino».
             if (elegidaAhora != null && elegidaAhora.Stagings.Count > 0)
-                await Managers.MapStagings.PlayAsync(stream, elegidaAhora.Stagings);
+                await Managers.MapStagings.PlayAsync(session, elegidaAhora.Stagings);
 
             if (elegidaAhora != null && elegidaAhora.TeleportPassage != 0)
             {
@@ -1748,10 +1762,7 @@ namespace Jondo.Unity.Server.Handlers
                     return;
                 }
 
-                CerrarConversacion();
-                await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                    ConnectionProtocol.Push(Op.Kld, ConnectionProtocol.BuildDialogClosed(
-                        ConnectionProtocol.NpcDialogCloseReason)));
+                await CloseAsync(session);
                 await TeleportHandler.ToMapAsync(stream, passage.DestinationMapId, passage.DestinationCellId);
                 return;
             }
@@ -1771,11 +1782,7 @@ namespace Jondo.Unity.Server.Handlers
                     if (adonde == 0) adonde = Managers.Dreams.MapaDelPozo;
                 }
 
-                CerrarConversacion();
-
-                await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                    ConnectionProtocol.Push(Op.Kld, ConnectionProtocol.BuildDialogClosed(
-                        ConnectionProtocol.NpcDialogCloseReason)));
+                await CloseAsync(session);
 
                 // Warko's brew: a soul before the map change, so the map he lands on draws him as one.
                 if (elegidaAhora.PhantomPhoenix != 0)
@@ -1783,7 +1790,7 @@ namespace Jondo.Unity.Server.Handlers
 
                 await WorldMoveHandler.TeleportAsync(stream, adonde);
                 Console.WriteLine($"[NPC] Reply {reply}: leads to map {adonde}.");
-                if (elegidaAhora.PhantomPhoenix != 0) await PhantomHandler.TellAsync(stream);
+                if (elegidaAhora.PhantomPhoenix != 0) await PhantomHandler.TellAsync(SessionContext.Current);
 
                 // The orbalantir's, after the map change: the mutation taken away or given.
                 if (elegidaAhora.EndsMutation) await MutationHandler.EndAsync(stream);
@@ -1801,11 +1808,7 @@ namespace Jondo.Unity.Server.Handlers
 
             int spokenTo = SessionContext.State.OpenDialogueNpcId;
             long spokenOn = SessionContext.State.OpenDialogueMapId != 0 ? SessionContext.State.OpenDialogueMapId : SessionContext.State.MapId;
-            CerrarConversacion();
-
-            await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                ConnectionProtocol.Push(Op.Kld, ConnectionProtocol.BuildDialogClosed(
-                    ConnectionProtocol.NpcDialogCloseReason)));
+            await CloseAsync(session);
 
             // The NPC goes from the map as the window shuts («leaves»): the larva caught. Only for
             // this character, as the mark the reply left only hides it from him.
@@ -1817,26 +1820,24 @@ namespace Jondo.Unity.Server.Handlers
             }
 
             if (completesAfterClosing != 0
-                && await Managers.Quests.CompleteByReplyAsync(stream, elegidaAhora!.Quest, completesAfterClosing))
+                && await CompleteQuestFromReplyAsync(session, questNpcId, elegidaAhora!, completesAfterClosing, giveFromReply: true))
             {
                 await GiveFromReplyAsync(stream, elegidaAhora);
                 // Whoever comes in once it is said and the window is shut: Selim Llenneb back in
                 // the vault on «Respaldar a Becky y dirigirte hacia la puerta».
-                if (elegidaAhora.ShowsNpc != 0) await ComeInAsync(stream, elegidaAhora);
+                if (elegidaAhora.ShowsNpc != 0) await ComeInAsync(elegidaAhora);
             }
 
             if (startsAfterClosing != 0)
             {
-                await Managers.Quests.StartAsync(stream, startsAfterClosing);
-                if (elegidaAhora!.Completes != 0)
-                    await Managers.Quests.CompleteByReplyAsync(stream, startsAfterClosing, elegidaAhora.Completes);
+                await StartQuestFromReplyAsync(session, questNpcId, elegidaAhora!);
                 return;
             }
 
             // And an NPC who comes in and speaks once this one is done (Darmas, then Ganymed).
             if (elegidaAhora != null && elegidaAhora.ThenNpc != 0)
             {
-                await ComesInAndSpeaksAsync(stream, elegidaAhora.ThenNpc, elegidaAhora.ThenLine);
+                await ComesInAndSpeaksAsync(session, elegidaAhora.ThenNpc, elegidaAhora.ThenLine);
                 return;
             }
 
@@ -1951,7 +1952,7 @@ namespace Jondo.Unity.Server.Handlers
             }
 
             estado.OpenDialogueMessage = siguiente.Message;
-            await PreguntarAsync(stream, siguiente.Message, LasQueTocan(siguiente),
+            await PreguntarAsync(SessionContext.Current, siguiente.Message, LasQueTocan(siguiente),
                                  Npcs.TemplateOf(estado.OpenDialogueNpcId), siguiente);
 
             Console.WriteLine($"[NPC] Reply {reply} leads to line {siguiente.Message}, " +
@@ -2013,12 +2014,8 @@ namespace Jondo.Unity.Server.Handlers
 
             // That the vendor who is open really has it: the catalogue is sent by us, so asking for
             // something else is not a valid purchase.
-            bool onSale = false;
-            foreach (int sold in NpcShops.CatalogueOf(OpenShopNpc))
-            {
-                if (sold == gid) { onSale = true; break; }
-            }
-            if (!onSale)
+            if (!NpcShops.CanBuy(OpenShopNpc, gid,
+                    criterion => PlayerCriteria.Met(criterion, SessionContext.State.MapId), ShopSubscriptionDays, quantity))
             {
                 Console.WriteLine($"[NPC] Vendor {OpenShopNpc} does not sell item {gid}.");
                 return;
@@ -2026,7 +2023,7 @@ namespace Jondo.Unity.Server.Handlers
 
             // What is paid with here. Without a token shop it is the usual: kamas.
             var tokenShop = TokenShops.Of(OpenShopNpc);
-            long unit = tokenShop == null ? ShopHub.UnitPrice(OpenShopNpc) ?? NpcShops.PriceOf(gid) : TokenShops.PriceOf(tokenShop, gid);
+            long unit = tokenShop == null ? ShopHub.UnitPrice(OpenShopNpc) ?? NpcShops.PriceOf(OpenShopNpc, gid) : TokenShops.PriceOf(tokenShop, gid);
             long price;
             try
             {
@@ -2071,10 +2068,12 @@ namespace Jondo.Unity.Server.Handlers
             }
 
             long uid = NextUid();
-            string effects = NpcShops.EffectsOf(gid);
+            string effects = NpcShops.PurchasedEffects(OpenShopNpc, gid, DateTimeOffset.UtcNow);
 
-            if (!DatabaseManager.InsertCharacterItem(uid, GameState.CharacterId, gid, (int)quantity,
-                                                     Equipment.Bag, effects))
+            if (tokenShop == null
+                ? !DatabaseManager.InsertCharacterItem(uid, GameState.CharacterId, gid, (int)quantity, Equipment.Bag, effects)
+                : !DatabaseManager.BuyWithTokens(GameState.CharacterId, uid, gid, (int)quantity, effects,
+                    tokenUid, tokenShop.TokenGid, (int)price, tokenLeft))
             {
                 Console.WriteLine($"[NPC] Item {gid} could not be saved.");
                 return;
@@ -2089,9 +2088,7 @@ namespace Jondo.Unity.Server.Handlers
             }
             else
             {
-                // Tokens are spent by removing them from the inventory, the same as when destroying part
-                // of a stack. If the purchase takes the last one, DestroyCharacterItem deletes the row.
-                DatabaseManager.DestroyCharacterItem(GameState.CharacterId, tokenUid, (int)price);
+                // SQLite has already paid for the item. Bring the session's two inventory views up to date.
                 Equipment.Remove(tokenUid, (int)price);
                 tokenLeft -= (int)price;
                 GameState.SetInventory(DatabaseManager.LoadInventory(GameState.CharacterId));
@@ -2203,7 +2200,8 @@ namespace Jondo.Unity.Server.Handlers
             foreach (var (uid, wanted) in sales)
             {
                 var item = Equipment.ByUid(uid);
-                if (item == null || item.Position != Equipment.Bag) continue;
+                if (item == null || item.Position != Equipment.Bag
+                    || ItemBinding.BlocksTransfer(item.Effects, DateTimeOffset.UtcNow)) continue;
                 int quantity = Math.Min(wanted, item.Quantity);
                 int left = item.Quantity - quantity;
                 if (!DatabaseManager.DestroyCharacterItem(GameState.CharacterId, uid, quantity)) continue;

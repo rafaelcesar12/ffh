@@ -521,6 +521,10 @@
    "look": "{6049}",
    "from": "npc chtigre domesticado"
   },
+  "1832": {
+   "look": "{6853||1=8931360,2=7130498}",
+   "from": "monster Sectario de Jalépona (6941), the look of the sectarian whose robe «Disfrazado de sectario de Jalépona» is stolen on [0,18] (quest 2453); INFERRED the colours (the 6716 look)"
+  },
   "2028": {
    "look": "{537|||100}",
    "from": "monster 927 estrella del mar Rano"
@@ -905,6 +909,26 @@
    "look": "{446|||120}",
    "from": "monster regalo animado"
   },
+  "2735": {
+   "look": "{8140}",
+   "from": "the Xelor's syncro grown 1 time(s): the bones after its own 8139 (Fin de los Tiempos, effect 149 on E3959)"
+  },
+  "2736": {
+   "look": "{8141}",
+   "from": "the Xelor's syncro grown 2 time(s): the bones after its own 8139 (Fin de los Tiempos, effect 149 on E3961)"
+  },
+  "2737": {
+   "look": "{8142}",
+   "from": "the Xelor's syncro grown 3 time(s): the bones after its own 8139 (Fin de los Tiempos, effect 149 on E3963)"
+  },
+  "2738": {
+   "look": "{8143}",
+   "from": "the Xelor's syncro grown 4 time(s): the bones after its own 8139 (Fin de los Tiempos, effect 149 on E3965)"
+  },
+  "2739": {
+   "look": "{8144}",
+   "from": "the Xelor's syncro grown 5 time(s): the bones after its own 8139 (Fin de los Tiempos, effect 149 on E3967)"
+  },
   "2824": {
    "look": "{5768|||100}",
    "from": "monster 6550 tsukumogami"
@@ -952,6 +976,10 @@
   "2846": {
    "look": "{9091}",
    "from": "monster 7983 nitrool"
+  },
+  "2849": {
+   "look": "{113}",
+   "from": "monster 3751 momia sin alma: the Xelor's Momificacion and 25a Hora"
   },
   "2868": {
    "look": "{287|||110}",
@@ -1389,9 +1417,6 @@
   ],
   "1829": [
    "Luz y ámbar"
-  ],
-  "1832": [
-   "Disfrazado de sectario de Jalépona"
   ],
   "2021": [
    "Castigo de amarrador"

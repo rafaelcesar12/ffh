@@ -1,11 +1,9 @@
 # Typed Game protocol and mapped live logging
 
-Game uses protocol **3.6.10.10**. Clients **3.6.10.10 and 3.6.10.11 use the exact
-same Game protocol**, so both use this single profile. `JondoVersion` is the Game
-wire project's MSBuild selector, defaulting to `3.6.10.10`; unsupported profile
-selections fail the build. `GameCodec.JondoVersion` exposes the same identity at
-runtime. The profile name identifies the protocol, not the launcher version or
-the precise client patch installed.
+Game defaults to protocol **3.6.10.10**, which clients **3.6.10.10 and 3.6.10.11**
+share. Use the [build-time protocol target](protocol-targets.md) to compile
+against the `3.8.1.2` beta profile. `GameCodec.JondoVersion` reports the
+compiled profile identity.
 
 ## Layers
 
@@ -18,11 +16,16 @@ the precise client patch installed.
 | `Jondo.Unity.ProtocolGenerator` | Descriptor/Roslyn validation and direct conversion/dispatch generation |
 | `Jondo.Unity.Server/Network/GameSession.cs` | Typed single-client sends through an injected Game codec |
 | `Jondo.Unity.Server/Network/GameMapAudience.cs` | Explicit map-instance event audiences and shared encoded broadcast |
+| `Jondo.Unity.Server/Network/MapInformationService.cs` | Repeatable roleplay-map replies, ordered feature hooks and actor-only refresh delivery |
+| `Jondo.Unity.Server/Network/MapInformationMessages.cs` | Direct viewer-owned complementary map snapshots |
+| `Jondo.Unity.Server/Network/MapActorMessages.cs` | Shared semantic player, monster, NPC, collector, prism and portal actors |
+| `Jondo.Unity.Server/Network/MonsterMessages.cs` | Shared semantic monster looks, rolled levels and grade policy for typed and legacy consumers |
+| `Jondo.Unity.Server/Network/MapPresenceService.cs` | Typed player arrival, departure and presentation refreshes |
 | `Jondo.Unity.Server/Network/MovementDispatch.cs` | Typed roleplay and combat movement request dispatch |
 | `Jondo.Unity.Server/Diagnostics/GameTrafficFormatter.cs` | Best-effort typed live-log presentation |
 
-The imported schema contains 2,169 messages. The semantic mapping covers 533
-payload/common message types, 65 enums and 1,374 payload/common fields, plus the
+The imported schema contains 2,169 messages. The semantic mapping covers 556
+payload/common message types, 65 enums and 1,462 payload/common fields, plus the
 four Game envelope roles. JondoEmu's stable
 C# API defines semantic names, required/nullable members and explicit oneof case
 records. Nullable message members and explicit `None` cases preserve absence
@@ -130,6 +133,14 @@ sends, including any write timeout.
 
 ## Incoming request boundary and compatibility routing
 
+Guild-tab and post-contribution allowance notifications construct
+`GuildContributionLeftEvent` directly through the explicit owner's codec, retaining
+header/result ordering and zero allowances. `MarketplaceHandler.AveragePricesAsync`
+constructs and sends `ObjectAveragePricesEvent` inline from a detached snapshot of
+the current table, including an empty replacement and int64 prices.
+These sends have no intermediate raw builder or projection. Their existing incoming
+request routing/parsing stays at the compatibility boundary described below.
+
 `GameNodeProxy` attempts semantic request decoding once per packet through the owning
 session's codec, under its existing session turn. This is generic decoding, without
 feature-specific alias allowlists. It dispatches the decoded request to typed entry,
@@ -184,9 +195,13 @@ come directly from the codec; the manual combat movement parser is removed. Comb
 action-sequence output and `jti` acknowledgments retain their existing serializers.
 
 Border crossing accepts a typed `MapChangeRequest`, retaining neighbour resolution,
-jail/raid restrictions, measured arrivals, persistence and departure/load/time/zaap
-ordering. The proxy supplies its entry-lifecycle map-change hook. The control harness
-uses the same typed movement dispatch as incoming client frames.
+jail/raid restrictions, measured arrivals and persistence. The mover receives
+`MapChangeOrientationEvent`, then (after the peer notifications) `MapCurrentEvent`,
+`TimeEvent` and `ZaapKnownListEvent` through its session codec, without request UIDs.
+Jail and raid-floor refusals use `TextInformationEvent`. The separate party follower
+position update (`ikv` in `3.6.10.10`) still needs a reviewed binding. The proxy supplies
+its entry-lifecycle map-change hook. The control harness uses the same typed movement
+dispatch as incoming client frames.
 
 `MovementDispatchTests` and `TypedCombatMovementTests` cover lifecycle guards, silent
 combat no-ops, packed/unpacked key cells, single MP charging, placement/turn/MP
@@ -203,6 +218,14 @@ Do not add an invented semantic facing binding to reproduce the legacy bytes.
 Client animation/final-facing smoke testing remains useful alongside automated
 wire/state checks.
 
+Movement tag 3 (`jsj.fuxb`) is also raw-only. An overload capture correlated value
+1 with overload, but the reviewed `11-08-2026` movement handlers (including
+`eon.mye`, RVA `0x4ea7200`) do not read it. The remote-actor path passes cells,
+actor ID, and `Cautious` to `eoo.baju` (`0x4ea7b10`), which selects animation
+using the decoded path and actor state or the separate cautious branch. This
+does not establish tag 3 as a decoy. The local player's overload behavior still
+uses the `CannotRun` restriction.
+
 ## Game identification, selection and entry migration
 
 `GameNodeProxy` decodes identification, character-list/selection (including
@@ -214,6 +237,21 @@ Invalid envelopes use the generic compatibility fallthrough described above. Ent
 require identification before selection and a selected, in-world character before
 map/context initialization. Selection also checks the ticket's server. Tutorial
 preference is decoded; the existing saved-map spawn policy is retained.
+
+Creation, name suggestion, and the three deletion actions are dispatched from
+typed requests. Creation accepts an absent remodel-detail block, as sent by
+`ecf.voz` (`0x4bb82d0` in the reviewed client), and preserves signed palette
+values. The result precedes the shared queue/list/gift
+refresh, with the new character first. Deletion preparation looks up the name
+on the session's account and server, confirmation keeps the transactional account
+check and refreshes the list, and completion sends the creation-eligibility event.
+The server does not store a secret answer to validate the deletion hash against.
+
+Authenticated relogin is accepted from selection and from the world. The backend
+registers the dashed token against the session's account before sending the
+UID-less `ReloginTokenEvent`. When in the world, the service then handles fight
+state and map departure and resets entry initialization. The client reconnects
+using that token.
 
 The force-selection event is constructed directly as `CharacterForceSelectionEvent`.
 The client automatically answers with `CharacterForceSelectionReadyRequest`; the
@@ -249,9 +287,233 @@ Map initialization is separately triggered by sequence confirmation, with a
 first-ping fallback. Subsequent pings only receive their pong and alteration tick.
 Fight-map handling retains spectator, resume and preparation precedence and fight
 locks; roleplay map actors are never sent into an active fight. Map-information
-updates remain repeatable on travel. Initial and map sequences now construct their
-messages directly; remaining feature hooks, welcome settings and character-management
-requests/acknowledgments still use compatibility paths.
+updates remain repeatable on travel. Initial state, map-opening sequences and roleplay
+map snapshots now construct their messages directly; remaining feature hooks, welcome
+settings and character-management requests/acknowledgments still use compatibility paths.
+
+### Quest journal, followed tracker and map marks
+
+`Quests.SendJournalAsync(GameSession, box)` and `SendMarksAsync(GameSession, mapId)`
+delegate to `QuestStateService`. `QuestMessages` constructs detached active entries,
+finished IDs and map-mark lists from current state; live sources scope ambient quest
+and NPC queries to the explicit owner. Sends reuse the caller's turn and owner codec.
+
+The journal sends first, including an empty loaded journal. Only entry (`box: true`)
+then reads the persisted followed order, removes stale/missing-step/finished entries,
+and sends the tracker, even empty. It reuses the same detached active records rather
+than serializing and reparsing a journal. Failed journal delivery prevents tracker
+reads/cleanup; failed tracker delivery retains cleanup already performed. Existing
+storage-layer error handling remains at its source boundary.
+
+Map marks retain offered/in-progress quest order and checked contextual NPC IDs,
+with int64 map IDs. NPCs with neither list are omitted. No marks sends an empty event
+with no map block, including on repeat map loads. Marks stay before map actors, and a
+mark-send failure stops the remaining map reply. Dream exit also sends its empty mark
+clear through the explicit owner's codec, after the dream-state clear and before the
+acknowledgment and guest departures.
+
+`QuestProtocol.BuildJournal`, `BuildFollowed` and both `BuildQuestMarks` overloads are
+removed. Incremental quest notifications and step-information replies retain their
+current routing and builders. The journal omits the indeterminate finished-entry
+tag-1 constant under the [construction policy](populated-unmapped-fields.md#quest-journal-construction-policy);
+the empty reinitialized-done list also uses normal protobuf encoding. No bindings
+changed and no lossless legacy-byte claim is made for those deliberate differences.
+
+`QuestStateTests`, `QuestStateFlowTests`, `QuestStateContractTests` and map-service
+coverage exercise opaque codecs, live framed sends, owner isolation, ordering,
+detachment, empty replacements, numeric widths and source/cleanup/delivery failures.
+`GroupDreamTests` checks dream clear → typed mark clear → acknowledgment ordering
+and that a failed mark clear stops the acknowledgment and guest departures.
+Targeted real-client journal, tracker and marker checks remain pending.
+
+### Achievement snapshots and earned notifications
+
+`Achievements.SendListAsync(GameSession)` delegates to `AchievementStateService`.
+`AchievementMessages` constructs detached `AchievementsEvent` snapshots from the
+existing sorted account-wide list: achiever IDs retain their owner fallback, claimed
+entries omit the optional finished level, and unclaimed entries retain their earned
+level or current-level fallback, capped at 200. The unpopulated pioneer rank stays at
+its default. Loaded empty lists send; absent logs omit delivery. List delivery precedes
+checking existing progress, updating the level-checked marker and announcing unlocks.
+A list-send failure still stops checking and all later entry hooks.
+
+Earned delivery uses `AchievementFinishedEvent` and
+`AchievementFinishedInformationEvent`, sharing an immutable `AchievedAchievement`.
+Each achievement retains credit → level note → persistence attempt → own notification
+→ map notification order. `DatabaseManager.SaveAchievement` retains its existing
+log-and-continue policy for ordinary SQLite write errors; propagated source/setup or
+delivery failures still stop later steps. A failed own send retains prior credit and
+persistence and prevents its map notification and later announcements.
+
+Triggers for quests/objectives, levels, crafting/jobs, map arrivals and counted actions
+now pass the source session explicitly. Deferred counts use `defer: true`, retaining
+their tally/pending behavior until a map check. Each map recipient encodes with its own
+codec through the semantic `SessionRegistry.BroadcastToMapAsync` overload, preserving
+source map-instance filtering, source exclusion and isolated recipient failures without
+acquiring recipient gameplay turns. The existing inferred audience policy is retained:
+a fighting source omits the map notice, while recipient fight IDs are not filtered.
+
+The owning operations carry that session too. In particular,
+`WorkshopHandler.GiveJobExperienceAsync(GameSession, ...)` uses the same owner for job
+progress, persistence, level-up/experience delivery and the achievement check. Crafting,
+smithmagic, job scrolls, breeding and ride rewards thread it through their calls.
+Gathering retains the session across its delayed completion and acquires its existing
+turn there. Item use/spending, guild rewards, quest mutations/rewards, NPC quest
+interactions, achievement claims and per-player fight completion have session-taking
+entry points; packet-loop and control-API callers supply their session. Legacy state
+queries run inside that owner's `SessionContext.Push` scope, which is restored on
+success and failure. These operations reuse caller-owned turns.
+
+`ForHeroAsync(master, hero)` keeps source and recipient separate: hero facts, credit,
+level and persistence remain the hero's, and the own event uses the master's codec.
+Account synchronization and each-character exceptions retain their original timing,
+including pending/level mutations before delivery and master-log updates after successful
+announcements. The existing streamless-master omission remains.
+
+### Account/guild house lists and world prism list
+
+`HouseHandler.SendAccountHousesAsync(GameSession)` and `SendGuildHousesAsync(GameSession)`
+send `HouseAccountEvent` / `GuildHousesEvent` directly through the owner codec.
+`HouseListMessages` constructs detached account/guild oneof branches in store order,
+skipping unknown doors and retaining house/model/instance identity, int64 street map IDs
+and optional prices, coordinates and guild rights. Full plaques share `MapHouseMessages`
+instance construction with map plaques and add rooms, chests and checked int32 skills.
+List plaques exclude nested guild information. Sale, admin and door locks remain distinct;
+the historical source policy still supplies admin lock from the access code and door lock
+from owner presence, rather than conflating them with sale state.
+
+An empty account list always sends. Guild members get even an empty guild list; absent
+membership or a failed membership lookup omits that send. Sale, purchase and guild-share
+handlers now take and scope the explicit owner; their list refresh stays at the same point
+in the existing burst. Seller notifications capture one detached account snapshot, send
+purchase/chest notices before the list and encode with each matching recipient's codec,
+retaining per-recipient log-and-continue failure handling. Guild founding's empty house-list
+reset is typed too, after item consumption and before the founding result/ranks burst.
+
+`PrismHandler.OnWorldEntryAsync(GameSession)` sends `PrismListEvent` from `PrismMessages`.
+It preserves subarea order, skips missing alliances and sends an empty replacement when
+there are no prisms. Own-alliance information includes an optional remaining-crystal count,
+including zero, and a crystal/inventory/item structure even with no crystal equipped.
+Equipped crystals retain template effects, quantity one, the checked int32 synthetic UID
+and the reviewed protective/no-crystal enum. Foreign views omit both owner-only fields.
+Map IDs and evolution dates are int64; placement dates remain seconds rather than
+milliseconds. Map prism actors share the same foreign-state semantic factory.
+
+The world list follows the [prism-list construction policy](populated-unmapped-fields.md#prism-list-construction-policy):
+localized tag 5 is indeterminate and deliberately omitted, while the mapped nested alliance
+UID is retained. The existing emblem-tag-4 omission policy applies here too. No binding
+changes or blanket lossless-legacy-byte claim accompany this conversion.
+
+### Map-information service
+
+`GameEntryBackend.SendMapInformationAsync` delegates to `MapInformationService`.
+The service owns the repeatable roleplay reply: clear old interactions, restore dream
+state, prepare anomalies, send marks before actors, send the conditional fight count,
+then haven-bag furniture/permissions before `AreaFightModifierUpdateEvent`. Raid and
+special-map displays follow, then quest/achievement/conquest arrival processing,
+phantom state and map staging. The arrival hooks share one resolved subarea value.
+
+The service takes an explicit owning session, scopes legacy sources to that owner and
+reuses the caller's session turn. It has no once-per-entry flag; `GameEntryService`
+retains that flag, request/map validation and fight readiness routing. Hook, codec and
+transport failures propagate immediately, without replaying or sending the remaining
+steps. `IMapInformationBackend` makes the hook order and snapshot delivery independently
+testable without a world database.
+
+`RefreshActorsAsync` sends only the current actor snapshot and the modifier event;
+admin and quest redraws use it without replaying map-arrival hooks. The live backend
+calls `MapInformationMessages.SendAsync`, which constructs
+`MapComplementaryInformationEvent` directly and sends through the owner's codec. There
+is no intermediate protobuf serialization, reparsing, projection or raw fallback.
+
+`MapActorMessages` supplies players, monster groups, NPCs with conditional looks/quest
+markers, collectors, prisms and portals. It reuses semantic character looks, retains
+alignment/mutation precedence, account identities and presentation-option order, and
+snapshots nested member/alternative lists. Leaders and modular alternatives have absent
+looks, independently of an explicit empty look. Other players are selected from the
+captured house/bag instance and exclude active fighters and spectators.
+
+`MapInteractiveMessages` retains viewer-specific skill visibility, resource availability
+and raid states, plus quest/readable/altar elements. Placements remain a subset of
+declarations: passages, dream doors and counters do not receive invented states. Usable
+resources retain a present zero age bonus. `MapHouseMessages` retains short plaques,
+instance identity, account/guild presence, optional int64 prices and the separate tag-5
+admin/tag-9 door-lock construction policies. Placement fights construct full typed teams,
+members, flag cells and party options from the fight owner.
+
+Haven-bag information uses the reviewed meanings **theme at tag 1, room ID at tag 2**,
+correcting their reversed legacy arguments. Owners use the explicit absent
+`CharacterBasicInformation` complement. The maintained contracts now also permit absent
+`MonsterInGroupInformation.Look`; these are structural presence corrections to existing
+bindings, not new field-name research. The installed reviewed August schema/binding pair
+includes the absent-complement construction policy.
+
+`MapPresenceService` sends typed player arrivals and presentation refreshes and typed
+directional departures/removals. Border travel, teleports, zaaps, houses and bags capture
+the source `GameMapAudience` before changing map/instance state. Even a same-map bag-owner
+change removes the player from the old instance; party-follow map updates retain their
+different-map condition. Arrivals exclude the mover. A walking direction goes only to
+party mates, before removal; jumps send removal alone. Departure sends use each target's
+codec, isolate failures and retain registration. Guild/alliance, equipment, wardrobe,
+slot-look, cosmetic, size-command and fight-return player refreshes share typed actors.
+Standalone NPC appearances reuse `MapActorMessages.NpcShown`: the explicit owner
+controls conditional visibility, looks and quest marks. Scripted hidden-NPC entrances
+still appear before opening their dialogue, and an appearance failure stops that
+sequence. Fight-end monster reappearance uses `MapActorMessages.MonsterGroup` after
+the fight count, with the existing roleplay-map `fightId: 0` audience. The typed
+`SessionRegistry.BroadcastToMapAsync` overload uses each recipient's codec and shares
+the byte overload's recipient filters and isolated fanout.
+
+Collector/prism map presence reuses `MapActorMessages.TaxCollectorShown` and
+`PrismShown`. Placement spends the item, sends the owner's actor, then the other
+roleplay-map recipients, then the existing alliance/world-list notice. Fight
+restoration keeps its result/state notices before the actor; conquest updates keep
+world-list information before the map redraw and suppress redraws while the prism
+is fighting. Removal uses `ContextRemoveElementEvent` before the relevant list/owner
+notices. Map broadcasts retain `fightId: 0`, sender exclusion on placement,
+per-recipient codecs and failure isolation; own-send failures propagate before fanout.
+These actors use the same emblem omission policy as full map snapshots. World-list,
+equipment, crystal and alliance-fight feature packets retain their separate serializers.
+
+The direct map path applies the documented omission policy to indeterminate
+alliance-emblem tag 4 and haven-bag tag 3; it does not claim lossless reproduction of
+those former raw values. See [the map construction policy](populated-unmapped-fields.md#map-snapshot-construction-policy).
+
+### Shared map/fight presence and reconnection opening
+
+`FightHandler` directly constructs map fight flags, counts, incremental teams,
+member removals and option changes. Full map snapshots and incremental fight
+presence share `TeamSnapshotOf`; the initial monster-side flag snapshot and team
+update retain a selected-empty member list, followed by growing monster teams.
+Collectors keep their name-ID branch and whole-side updates. Entry omits a zero
+fight count, while fight completion explicitly sends zero. Flags disappear when
+placement ends without changing the count.
+
+Map delivery uses `fightId: 0` and each recipient's codec with isolated failures.
+Mirrored team/option/member updates retain the separate fighter/spectator audience
+and pending-sequence opening. The initial own-team sends still propagate failure
+before map delivery. Dungeon and placement board removals keep `kar` before the
+semantic actor/member removals and the existing trailing board/team updates.
+
+Spectator and remote alliance-defender departures use captured map instances with
+encode-once `Map.SendAsync` delivery. The defender's old map is captured before joining mutates map
+state; its removal remains before the alliance-list notice. Dream goblin/group
+removals go only to the owning session, preserving mutation, delivery and
+persistence order and failure propagation.
+
+`WorldEntry` calls `EntryInformationMessages.SendFightReconnectionAsync` directly
+after map time and before spells: warning/error text **184** with the character's
+name, then an empty `AreaFightModifierUpdateEvent`. No raw construction or entry
+projection remains in that opening hook.
+
+Removed the obsolete `MapEntryOf`, `FightJoinProtocol.FightOnMap`,
+`BuildFightShown`, `BuildFightHidden`, `BuildFightCount`, `BuildActorHidden`,
+`BuildTeamMemberRemoved` and `ConnectionProtocol.BuildBackInTheFight` builders.
+Shared raw team serializers still serve the remaining fight board/window work.
+`MapFightContractTests` now owns the independent flag/count/removal/reconnection
+wire fixtures; `MapFightPresenceTests` and `CollectorPrismPresenceTests` cover live
+ordering, audiences and failed-recipient isolation. The reconnection hook's codec
+and transport boundaries are covered in `GameEntryMapMessagesTests`.
 
 ### HAAPI identity and gift continuation
 
@@ -340,7 +602,7 @@ inherited slot never shifts a later custom colour.
 Creation, recolouring and outfit application write only these choices. The shared
 `CharacterLookBuilder` composes appearances from current owner state; immutable
 breed/sex defaults live in `BreedLookCatalog`. Inventory builds distinct preview
-and map looks, legacy map loading reuses the shared actor builder, and fighter-show
+and map looks, typed map actors reuse the shared semantic look, and fighter-show
 uses the fighter's normal/current appearance. Byte serialization occurs at packet
 boundaries. `LookHex`, `LookBytes`, `PlayerActorDetails` and actor-detail reconstruction
 are removed, so storage and selection no longer construct look blobs.
@@ -472,8 +734,9 @@ alignment/honour, presets, mutations, fight return, commands and control-API cha
 Their existing position among surrounding messages and failure propagation are retained.
 Heartbeat expiration takes an explicit session and scopes its legacy feature hooks to that
 owner. `Characters/CharacteristicRules.cs` owns the fixed pods base and derived contribution
-formulas, shared by snapshots, preset columns and entry weight. Characteristic construction
-no longer depends on `ConnectionProtocol`; its payload/value adapters are removed.
+formulas. `ConnectionProtocol.PodsBeforeStrength` retains character/job level gains, including
+Omega levels, for snapshots, preset columns and entry weight. Typed allocation replies also
+retain actual carried item weight. The legacy characteristic payload/value adapters are removed.
 
 `CharacteristicRules` also owns capped base life and level-derived capital. Preset/fallback
 allocation costs are calculated in checked int64 arithmetic; negative and out-of-int32
@@ -725,8 +988,7 @@ Legacy gain/loss serializers consume the same semantic entry/effect builders.
 
 `ObjectEffectCaseNone` explicitly represents an unset effect-value oneof. It differs
 from `ObjectEffectCaseValueInt(0)` and a present-empty dice value. The binding uses
-`noneType`, with no wire-schema or field-number change. The installed mapping hash
-in provenance is updated; the original imported-source hash is retained.
+`noneType`, with no wire-schema or field-number change.
 The alteration reference row passed the lossless semantic-scope audit. Action-only
 effects have dedicated semantic and protocol-presence regressions. This does not
 classify unrelated unmapped data as unused.
@@ -822,10 +1084,10 @@ overflow before a wrapped value can reach membership or the member list.
 
 Membership keeps the existing `GuildStore.ContributedBy(characterId)` policy: the
 persisted total of contributed guild kamas across stored contribution rows. It is
-not replaced with weekly activity tokens or the inventory token stack. The reviewed
-context placeholder is explicitly zero in silent entry/identity updates, matching
-the former builder's omission. The protocol still represents nonzero historical
-placeholder values without assigning them new gameplay meaning.
+not replaced with weekly activity tokens or the inventory token stack. `SkinId`
+is explicitly zero in silent entry/identity updates, matching the former builder's
+omission. The legacy map-actor membership builder retains its separate skin-1791
+policy; see [the reviewed mapping](#upstream-guild-hall-customization-mapping).
 
 Headers now include `GuildHalls.ChoiceOf(guild.Id)?.HallId`, which the former builder
 omitted: no choice is absent, and the hall ID is distinct from its theme. Founding
@@ -849,10 +1111,51 @@ boundaries, presence, snapshots, recipient isolation and failures. Socket/storag
 regressions cover conditional entry, hall reloads, expulsion, member-specific rename/
 emblem notifications and real contribution/mission milestone ordering. Historical
 wire fixtures moved to the protocol suite, alongside optional hall zero/absence,
-nested guild/social/emblem presence, int64 totals, nonzero score and context values.
+nested guild/social/emblem presence, int64 totals, nonzero score and skin IDs.
 These are conditional-hook migrations; the current initial sequence comprises
 **32 unconditional direct sends + equipped-set snapshots + two optional sends**,
 with no reference loader or recorded entry rows.
+
+#### Upstream guild-hall customization mapping
+
+The **13 November 2026** native investigation names the August `jry` tag-2 branch
+**guild_hall_customization_information** and its `jrn` payload
+**MapComplementaryGuildHallCustomizationInformation** (formerly `unknown_fuur` /
+`UnknownJrn`). The installed bindings now cover all three reviewed int32 fields:
+
+| August field | Semantic field | Confirmed client use |
+|---|---|---|
+| `futh`, tag **2** | `skin_id` | Supplies EntityLook's short skin list through the guild-service map override. |
+| `futi`, tag **3** | `color_7` | Supplies zero-based native EntityLook color-list slot **7**. |
+| `futk`, tag **5** | `color_8` | Supplies zero-based native EntityLook color-list slot **8**. |
+
+`color_7` and `color_8` name native rendering slots, not protobuf field numbers or
+guessed visual parts. The August map handler **`0x4cfbb70`** forwards the values
+through notification `cug`; callback **`0x51ff140`** stores them in the guild service.
+`ApplyGuildCustomisation.MoveNext` **`0x5446090`** reads checked interface getters
+and supplies the skin list and colors to EntityLook. The same path is established
+on the September and October builds despite shuffled fields.
+
+The renderer's skin getter also proves that `GuildMembershipEvent.ftin`, tag **4**,
+is **skin_id**: membership supplies the fallback, and map customization supplies
+the override. The former captured **1791** is a skin ID, not a guild identifier,
+score or required constant. Wire values remain int32; native short narrowing and
+the override's **-1** fallback sentinel are rendering behavior.
+
+The nested `jrn.futg` message and `futj` integer remain unmapped, with no positive
+native-use witness and incomplete caller coverage. The separate `jqj` selection
+boolean retains its [client-unused/omit decision](populated-unmapped-fields.md#guild-hall-selection-boolean-jqj-tag-1).
+
+Jondo imports these bindings from the reviewed August schema/mapping pair through
+`Import/import-remap.py`. The stable model and JSON case names distinguish
+`GuildHallInformation`, `GuildHallCustomizationInformation` and
+`GuildHallSelectionInformation`. `GuildMembershipEvent.SkinId` replaces the former
+context placeholder without changing its wire tag or existing send values.
+
+`GuildHallMappingTests` independently exercises populated and default customization,
+signed int32 boundaries and the -1 sentinel, selected-empty selection, the separate
+own-hall theme branch, semantic JSON naming and raw retention of unmapped fields.
+Direct map construction remains in the entry migration backlog.
 
 ### Entry status, preferences and social notifications
 
@@ -907,6 +1210,34 @@ Semantic, source-failure and socket/storage regressions cover this batch. Indepe
 protocol fixtures pin all seven event aliases/payloads, notice presence/Unicode,
 packed and unpacked lists, opaque channel slots, signed integer boundaries and the
 subscription request's signed correlation IDs.
+
+### Guild roster and startup social lists
+
+`GuildRosterMessages` directly constructs full `GuildMembersEvent` replacements for
+entry, windows, joining/founding and member refreshes. The **11-08-2026** Game
+export supplies the `GuildMember`, `GuildMemberHistory` and `PlayerNote` bindings.
+Present-empty wrappers are retained; mood smiley has no roster source and stays
+at its default, and indeterminate alignment is omitted.
+The reviewed social-member fields receive actual account, enrollment date, gender
+and connection state, correcting the legacy writer's reversed/misassigned values.
+Snapshots are detached, source/member order and missing-character filtering remain,
+and each recipient uses its own codec with existing sequential failure boundaries.
+
+The same export supplies `FriendListEvent` / `AcquaintanceListEvent` (`kqg` / `koj`)
+and their nested bindings. MCP graph/native receivers establish full-list
+replacement semantics. Fields without a producer value stay at their defaults or
+absent. `FriendListService` owns snapshots, request sends, mutation
+refreshes and presence delivery. Empty lists send; reciprocity and source order,
+offline hours, status and playing-character data remain. Own failures propagate;
+remote refreshes log/stop within that recipient, while presence fanout logs/continues.
+`GameNodeProxy` dispatches `ChatCommunitySelectionRequest` (`hos`) through the
+typed request path and sends `CommunityChannelEvent()` through the owner's codec,
+applying the entry omission policy to request-driven sends too.
+
+`MembersFrame`, `GuildProtocol.BuildMember` / `BuildMembers` and the raw mutual/contact
+list builders are removed. Incremental guild/card and other social action packets
+retain their separate live consumers. See the [construction policy](populated-unmapped-fields.md#guild-roster-and-startup-social-construction-policy).
+Targeted client acceptance and new traffic remain pending.
 
 `AllianceRankMessages` directly constructs `AllianceRanksEvent` using the reviewed
 `RankInformation` records: stored names/IDs, `Flag` as `Modifiable`, integer rights,
@@ -1126,6 +1457,22 @@ exception, `messages`, `enums`, the four `gameEnvelope` roles, and optional
 See the [shared mapping contract](connection-protocol.md#mapping-contract) for
 field, case and enum bindings. Stable-model edits are a separate source change.
 
+For a reviewed remap-format mapping/schema pair, use the adapter:
+
+```sh
+python3 Jondo.Unity.Protocol.Game.Wire/Import/import-remap.py \
+  --schema /path/to/game.proto \
+  --mapping /path/to/reviewed-game.json \
+  --bindings Jondo.Unity.Protocol.Game.Wire/Mappings/game-3.6.10.10.json \
+  --version 3.6.10.10
+```
+
+The adapter preserves existing C# member names and construction policies and adds
+new reviewed bindings. Migrate changed type identities, maintained oneof case names
+and intentional member renames explicitly in the models/bindings before importing.
+The normal importer validates and publishes the adapted C# mapping. Generated
+conversions are validated by the subsequent build.
+
 The importer accepts Game's proto3 schema subset (messages, enums, maps, oneofs,
 optional/repeated fields and field attributes). It checks wire references and
 policies before writing, flattens dotted declarations with collision detection,
@@ -1135,9 +1482,8 @@ original Any/dispatch identities, including dotted names. Tags, wire types,
 cardinality, presence, enum numbers and oneofs are preserved; unsupported schema
 syntax is rejected rather than silently removed.
 
-`Import/game-3.6.10.10.provenance.json` records the protocol version, project-relative
-schema/mapping paths, and SHA-256 hashes of the input and installed artifacts.
-Input validation finishes before writes; publication of the several files is
+The importer publishes the normalized schema and C# binding mapping.
+Input validation finishes before writes; publication of the two files is
 sequential. Build the wire project afterwards for authoritative descriptor and
 stable C# type validation. Importing a new version does not register it as a
 supported runtime profile; that requires an explicit profile/build change.

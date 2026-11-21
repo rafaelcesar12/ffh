@@ -1,7 +1,4 @@
-using Jondo.Unity.Launcher;
-using Jondo.Unity.Protocol;
 using System;
-using System.Net.Sockets;
 using System.Threading.Tasks;
 
 namespace Jondo.Unity.Server.Network
@@ -22,7 +19,7 @@ namespace Jondo.Unity.Server.Network
         public static async Task<int> SendInitialStateAsync(GameSession session, DbCharacter character)
         {
             using var context = SessionContext.Push(session);
-            var stream = session.Stream ?? throw new InvalidOperationException("World entry requires a connected game session.");
+            if (session.Stream == null) throw new InvalidOperationException("World entry requires a connected game session.");
             var initial = new GameEntryInitialMessages(
                 Managers.HavenBagStore.RoomsOf(character.Id), Managers.Merkasako.Themes,
                 session.State, new ProfessionMessages(Handlers.ArtisanHandler.Jobs(), Managers.SkillManager.ForJob),
@@ -32,7 +29,7 @@ namespace Jondo.Unity.Server.Network
                 () => GuildRankService.Live.Initial(character.Id),
                 () => CharacterSelectionMessages.Success(character),
                 () => InventoryMessages.FromCatalogue.Snapshot(session.State),
-                EntryEnvironmentMessages.Live.Zaaps, EntryEnvironmentMessages.Live.Calendar,
+                () => EntryEnvironmentMessages.Live.Zaaps(character.Id), EntryEnvironmentMessages.Live.Calendar,
                 () => EntryInformationMessages.PreviousConnection(session.State.PreviousVisit), AfterSelectionMessages.Live,
                 InitialPresentationMessages.Live(character));
             int sent = await initial.SendAsync(session);
@@ -52,25 +49,25 @@ namespace Jondo.Unity.Server.Network
             await Handlers.FriendsHandler.OnWorldEntryAsync(session);
 
             // The world's prisms, for the world map (ife): everybody gets them, alliance or not.
-            await Handlers.PrismHandler.OnWorldEntryAsync(stream);
+            await Handlers.PrismHandler.OnWorldEntryAsync(session);
 
             // What happened to his tax collectors while he was away (hkx).
-            await Handlers.TaxCollectorHandler.OnWorldEntryAsync(stream, character.Id);
+            await Handlers.TaxCollectorHandler.OnWorldEntryAsync(session);
 
             // Inside a dream: restore it, or leave it when there is none to go back to.
-            await Handlers.DreamHandler.OnWorldEntryAsync(stream);
+            await Handlers.DreamHandler.OnWorldEntryAsync(session);
 
             // The treasure hunts under way (hhf), as they stand.
-            await Handlers.TreasureHuntHandler.OnWorldEntryAsync(stream, character.Id);
+            await Handlers.TreasureHuntHandler.OnWorldEntryAsync(session);
 
             // Inside a house: which one, when the way in was not kept.
             Handlers.HouseHandler.OnWorldEntry(SessionContext.Current.AccountId);
 
             // The guild's houses, for the guild window's «Casas» tab (jjs).
-            await Handlers.HouseHandler.SendGuildHousesAsync(stream, character.Id);
+            await Handlers.HouseHandler.SendGuildHousesAsync(session);
 
-            byte[]? sales = Handlers.MarketplaceHandler.SalesHistoryAtEntry(character.Id, SessionContext.Current.AccountId);
-            if (sales != null) await EnviarAsync(stream, ConnectionProtocol.Push(Op.Las, sales));
+            var sales = Handlers.MarketplaceHandler.SalesHistoryAtEntry(character.Id, session.AccountId);
+            if (sales != null) await session.SendAsync(sales);
 
             await session.SendAsync(CharacteristicsMessages.Live.Snapshot(session));
             sent++;
@@ -85,10 +82,6 @@ namespace Jondo.Unity.Server.Network
             return sent + tail;
         }
 
-        /// <summary>Writes a frame through the entry projection and owning session's traffic log.</summary>
-        private static Task EnviarAsync(NetworkStream stream, byte[] message)
-            => GameEntryMessages.SendAsync(stream, message);
-
         /// <summary>Sends map-entry state, then fresh characteristics and known zaaps.</summary>
         /// <param name="fightToRejoin">
         /// Set when the character is going straight back into a fight. The opening uses
@@ -98,7 +91,7 @@ namespace Jondo.Unity.Server.Network
                                                     Jondo.Unity.World.Fights.FightInstance? fightToRejoin = null)
         {
             using var context = SessionContext.Push(session);
-            var stream = session.Stream ?? throw new InvalidOperationException("Map entry requires a connected game session.");
+            _ = session.Stream ?? throw new InvalidOperationException("Map entry requires a connected game session.");
             int sent = await GameEntryMapMessages.Live.SendAsync(session,
                 MapEntryOpeningMessages.Live, fightToRejoin == null
                     ? Jondo.Unity.Protocol.Game.GameContext.RolePlay : Jondo.Unity.Protocol.Game.GameContext.Fight,
@@ -106,16 +99,14 @@ namespace Jondo.Unity.Server.Network
 
             // Snapshot after the map sequence commits the roleplay regeneration timestamp.
             await session.SendAsync(CharacteristicsMessages.Live.Snapshot(session));
-            await session.SendAsync(EntryEnvironmentMessages.Live.Zaaps());
+            if (fightToRejoin == null)
+                await EntryEnvironmentMessages.SendDiscoveredAsync(session, mapId);
+            else
+                await EntryEnvironmentMessages.Live.SendKnownAsync(session);
             sent += 2;
 
-            async Task<int> SendReconnectionAsync()
-            {
-                await EnviarAsync(stream, ConnectionProtocol.Push(Op.Lqn,
-                    ConnectionProtocol.BuildBackInTheFight(character.Name)));
-                await EnviarAsync(stream, ConnectionProtocol.BuildActorsComplete());
-                return 2;
-            }
+            Task<int> SendReconnectionAsync()
+                => EntryInformationMessages.SendFightReconnectionAsync(session, character.Name);
 
             Console.WriteLine($"[World] Block 3 sent: {sent} messages, map {mapId}, characteristics " +
                               $"and known zaaps resent.");

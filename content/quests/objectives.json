@@ -113,15 +113,11 @@
    "type": -1,
    "elements": [
     {
-     "map": 153356296,
-     "element": 504680
-    },
-    {
-     "map": 153357316,
-     "element": 504679
+     "map": 153878787,
+     "element": 489396
     }
    ],
-   "why": "«Examiner la stele d'un vestige sur la route des ames». Element 504680 is the only one with graphic 3518 in subarea 450, which world.db calls «Route des ames». Map [2,-3]. The tavern's, 504679 on [0,-3] (Pandawa's), counts as well: Dofus pour les noobs gives it as the one «à la taverne et donc sur la route des âmes»."
+   "why": "Route des âmes: exterior vestige stelae (graphic 32613) at [0,-3]."
   },
   {
    "objective": 9818,
@@ -129,15 +125,23 @@
    "type": -1,
    "elements": [
     {
-     "map": 153356294,
-     "element": 504681
+     "map": 154011398,
+     "element": 489385
     },
     {
-     "map": 153356294,
-     "element": 504682
+     "map": 154010886,
+     "element": 489387
+    },
+    {
+     "map": 154011397,
+     "element": 489395
+    },
+    {
+     "map": 153878789,
+     "element": 489388
     }
    ],
-   "why": "«Examiner la stele d'un vestige dans les champs». The two elements with graphic 3518 on map [0,-4], whose subarea is 444 «Champs» -which MapLoadHandler renumbers to 20663, and that is why world.db leaves it nameless-. Either will do."
+   "why": "Champs: exterior vestige stelae (graphic 32613) at [-3,-6], [-2,-6], [-3,-5], [0,-5]."
   },
   {
    "objective": 9819,
@@ -145,23 +149,15 @@
    "type": -1,
    "elements": [
     {
-     "map": 153354244,
-     "element": 504677
+     "map": 154010882,
+     "element": 489391
     },
     {
-     "map": 153354246,
-     "element": 504672
-    },
-    {
-     "map": 153355268,
-     "element": 504675
-    },
-    {
-     "map": 153355270,
-     "element": 504678
+     "map": 154010624,
+     "element": 489392
     }
    ],
-   "why": "«Examiner la stele d'un vestige pres du lac». The four with graphic 3518 in subarea 442, which world.db calls «Lac». Maps [0,-2], [0,-1], [-1,-2] and [-2,-2]."
+   "why": "Lac: exterior vestige stelae (graphic 32613) at [-2,-2], [-2,0]."
   },
   {
    "objective": 9820,
@@ -169,15 +165,15 @@
    "type": -1,
    "elements": [
     {
-     "map": 153355272,
-     "element": 504674
+     "map": 153879301,
+     "element": 489389
     },
     {
-     "map": 153355264,
-     "element": 504676
+     "map": 153880836,
+     "element": 489390
     }
    ],
-   "why": "«Examiner la stele d'un vestige dans les paturages». The two with graphic 3518 in subarea 445, «Paturages». Maps [1,-4] and [2,-4]."
+   "why": "Pâturages: exterior vestige stelae (graphic 32613) at [1,-5], [4,-4]."
   },
   {
    "objective": 9821,
@@ -185,11 +181,19 @@
    "type": -1,
    "elements": [
     {
-     "map": 153355266,
-     "element": 504673
+     "map": 153879297,
+     "element": 489393
+    },
+    {
+     "map": 153880321,
+     "element": 489397
+    },
+    {
+     "map": 153879552,
+     "element": 489394
     }
    ],
-   "why": "«Examiner la stele d'un vestige dans la foret». The only one with graphic 3518 in subarea 443, «Foret». Map [2,-2]."
+   "why": "Forêt: exterior vestige stelae (graphic 32613) at [1,-1], [3,-1], [2,0]."
   },
   {
    "objective": 13849,
@@ -5851,9 +5855,9 @@
    "givesEach": true,
    "anyOrder": true,
    "afterObjectives": [16264],
-   "elements": [{"map": 205261570, "element": 518964}, {"map": 205261057, "element": 518638}, {"map": 205260033, "element": 518642}],
+   "elements": [{"map": 205261570, "element": 518964}, {"map": 205261057, "element": 518640}, {"map": 205260033, "element": 518642}],
    "gives": [{"item": 32275, "count": 3}],
-   "why": "«Obtén un recipiente de los tanukis»: the sandy rocks of [27,-28], [26,-27] and [24,-27] hand over a Rosa del desierto de Pandala each (32275, three in all, one per rock); the objective itself is done by Tanuha's reply (54234). Dofus pour les noobs («Dites-le avec des fleurs»). The elements are INFERRED: in [26,-27] and [24,-27] the stone heaps of graphic 66421 that carry no skill of their own (518638, 518642; 519626 and 519635 were tried: one is a mining node asking for level 100, the other is not usable); [27,-28] holds only three silicate nodes (518963-518965), 518964 is used."
+   "why": "«Obtén un recipiente de los tanukis»: the sandy rocks of [27,-28], [26,-27] and [24,-27] hand over a Rosa del desierto de Pandala each (32275, three in all, one per rock); the objective itself is done by Tanuha's reply (54234). Dofus pour les noobs («Dites-le avec des fleurs»). The elements are INFERRED: in [26,-27] and [24,-27] the stone heaps of graphic 66421 that carry no skill of their own (518638, 518642; 519626 and 519635 were tried: one is a mining node asking for level 100, the other is not usable); [27,-28] holds only three silicate nodes (518963-518965), 518964 is used. Review fix: in [26,-27] the rose takes the heap 518640 (cell 559, right side) because «L'égalité des sexes» (2168) takes 518638 (cell 336, the left edge) for its «petit caillou plat à gauche de la map»; [24,-27] has a single heap (518642), shared by the rose and the pebble of 2168 (each needs its own quest in hand)."
   },
   {
    "objective": 1487,
@@ -6037,14 +6041,6 @@
    "why": "The Zampívoro oscuro (4164) comes out in the dark clearing while the quest wants him beaten, with Nabrisa in his belly; Dofus pour les noobs («L'ombre et la proie»): «défier le Gloutovore Obscur qui tient en son ventre l'eniripsa que vous recherchez. Le combat peut se faire à plusieurs»."
   },
   {
-   "objective": 10148,
-   "quest": 1665,
-   "kind": "enter",
-   "map": 219152384,
-   "afterObjectives": [10147],
-   "why": "«Escolta a Nabrisa hasta el palacio de Bonta» (564818): the palace hall where Gabi Lan stands, with Nabrisa following (the follower item 17076 she gives on «Escoltar a Nabrisa»); Dofus pour les noobs («L'ombre et la proie»): «Vous obtenez Nabrisa en personnage suiveuse afin de la ramener à la citée Blanche»."
-  },
-  {
    "objective": 12026,
    "quest": 1823,
    "kind": "reply",
@@ -6174,8 +6170,10 @@
    "kind": "click",
    "afterObjectives": [16732],
    "elements": [{"map": 207619086, "element": 519615}],
+   "requires": [{"item": 23538, "count": 1}],
+   "spends": true,
    "gives": [{"item": 23053, "count": 1}],
-   "why": "«Obtén el shake cuando haya terminado de fermentarse»: «cliquez sur la cuve pour récupérer un Shaké d'exception» (Dofus pour les noobs («Les habitudes ont l'eau-de-vie dure»)): the vat (element 519615, under the big green still). The hour's wait is NOT enforced (a click row has no wait): the engine only waits on replies."
+   "why": "«Obtén el shake cuando haya terminado de fermentarse»: «cliquez sur la cuve pour récupérer un Shaké d'exception» (Dofus pour les noobs («Les habitudes ont l'eau-de-vie dure»)): the vat (element 519615, under the big green still), filled with the empty bottle Arumichi hands over (23538, spent; review fix). The hour's wait is NOT enforced (a click row has no wait): the engine only waits on replies."
   },
   {
    "objective": 16736,
@@ -6194,19 +6192,697 @@
    "why": "«Busca a los agresores en el puerto de Akwadala»: the bar fight against the drunk sailors of the tavern (npc_fights.json) is what does it (Dofus pour les noobs («Les habitudes ont l'eau-de-vie dure»)): «Un combat se lance, il s'effectue seul»."
   },
   {
-   "objective": 16739,
-   "quest": 2170,
-   "kind": "enter",
-   "map": 207619086,
-   "afterObjectives": [16738],
-   "why": "«Escolta al aprendiz hasta la destilería»: arriving at the distillery [20,-25] once the sailors gave in (16738); the follower is his escorted placement (spawns.json) (Dofus pour les noobs («Les habitudes ont l'eau-de-vie dure»))."
-  },
-  {
    "objective": 5344,
    "quest": 872,
    "kind": "beat",
    "monster": 3221,
    "why": "«Ayuda a los Weyes Magos a protegerse de M.O. Elmen Delsako» (886554): Gas Paw's line 10494 says he escaped and threatens the Weyes Magos; he is beaten in «¡M.O. Pardy!» (880, objective 5360 against monster 3221 at Mel Chiow's map 66060548). The reward star 12865 is given «por haber ayudado a los Weyes Magos». INFERRED: no walkthrough page names the closer."
+  },
+  {
+   "objective": 16714,
+   "quest": 2177,
+   "kind": "enter",
+   "map": 209192199,
+   "why": "«Escolta a Seijin Zena a la cumbre de Airedala» (847544): arriving at [21,-39] with the kozaru (the escorted placement of spawns.json). Dofus pour les noobs («Questions existentielles»): [21,-39], the summit of Aerdala."
+  },
+  {
+   "objective": 16715,
+   "quest": 2177,
+   "kind": "enter",
+   "map": 209193219,
+   "afterObjectives": [16748],
+   "why": "«Escolta a Seijin Zena hasta delante de la estatua del Gran Puda» (847545): arriving at [23,-35] after the summit's talk. Dofus pour les noobs («Questions existentielles»)."
+  },
+  {
+   "objective": 16716,
+   "quest": 2177,
+   "kind": "enter",
+   "map": 209192193,
+   "afterObjectives": [16749],
+   "why": "«Escolta a Seijin Zena hasta los pies de la cascada» (847546): arriving at [21,-33] after the statue's talk. Dofus pour les noobs («Questions existentielles»)."
+  },
+  {
+   "objective": 16717,
+   "quest": 2177,
+   "kind": "enter",
+   "map": 209192706,
+   "afterObjectives": [16750],
+   "why": "«Escolta a Seijin Zena a un lugar apartado» (847547): arriving at [22,-34] after the waterfall's talk. Dofus pour les noobs («Questions existentielles»)."
+  },
+  {
+   "objective": 16720,
+   "quest": 2177,
+   "kind": "use",
+   "map": 209191424,
+   "afterObjectives": [16719],
+   "why": "«Haz que sople el viento en el árbol flauta mediante el abanico grande» (847557): the Gran abanico (23498, its effect 30 is this objective, its own condition the map [20,-32]) used there; it turns into the second fan (23510). Dofus pour les noobs («Questions existentielles»)."
+  },
+  {
+   "objective": 16721,
+   "quest": 2177,
+   "kind": "use",
+   "map": 209192195,
+   "afterObjectives": [16720],
+   "why": "The second fan (23510, effect 30 = 16721, condition the map [21,-35]) used before the second flute tree (847558); it turns into the third (23511)."
+  },
+  {
+   "objective": 16722,
+   "quest": 2177,
+   "kind": "use",
+   "map": 209192197,
+   "afterObjectives": [16721],
+   "why": "The third fan (23511, effect 30 = 16722) used before the third flute tree [21,-37] (847559); it is gone."
+  },
+  {
+   "objective": 16718,
+   "quest": 2177,
+   "kind": "beat",
+   "monsters": [6365, 6364],
+   "times": 6,
+   "map": 209192706,
+   "afterObjectives": [16751],
+   "why": "«Despeja las inmediaciones de insectos, que desconcentran a Seijin Zena» (847548): the six fights against the groups of Moskito insistente (6365) and Araknawa insistente (6364) of the secluded spot (groups.json, six written groups), after Zena's request (16751); «Au total il y a 6 combats à faire pour éliminer tous les moustiques» (Dofus pour les noobs («Questions existentielles»))."
+  },
+  {
+   "objective": 10148,
+   "quest": 1665,
+   "kind": "enter",
+   "map": 219152384,
+   "afterObjectives": [10147],
+   "requires": [{"item": 17076, "count": 1}],
+   "spends": true,
+   "showsNpc": 3004,
+   "why": "«Escolta a Nabrisa hasta el palacio de Bonta» (564818): the palace hall where Gabi Lan stands, with Nabrisa following (the follower item 17076 she gives on «Escoltar a Nabrisa», «811: 1 fight left»), so only with the follower carried -- a fight on the way loses her and she waits again in the dark clearing --; there she stops following (17076 taken back) and comes in by Gabi Lan, «Gracias por escoltarme hasta Bonta» (21804), as Soki at the end of his walk (14205). Dofus pour les noobs («L'ombre et la proie»): «Vous obtenez Nabrisa en personnage suiveuse afin de la ramener à la citée Blanche. Retournez au Palais de Bonta en [-36,-60]»."
+  },
+  {
+   "objective": 16388,
+   "quest": 2151,
+   "kind": "read",
+   "elements": [{"map": 207623172, "element": 518646}],
+   "afterObjectives": [16387],
+   "why": "«Consulta el registro de la biblioteca»: the books at the foot of the low table on the right upstairs in the library [21,-27] (207623172, element 518646, gfx 32822, cell 357), the copy of the bamboo register (document 632, content/world/readables.json), after Kykori has pointed to it (16387, her 41262). Dofus pour les noobs («Sous le bois de sa colère»): «Montez à l'étage et cliquez sur les livres au pied de la table basse à droite». INFERRED: which of the floor's five elements are those books (518646 is the only one at the low table's foot on the right)."
+  },
+  {
+   "objective": 16391,
+   "quest": 2151,
+   "kind": "enter",
+   "map": 205521925,
+   "afterObjectives": [16390],
+   "why": "«Descubre la explotación»: arriving before the Bambusería [26,-30] (205521925, the objective's own map) once Takeono has said Kykori went there (16390, 41277). Dofus pour les noobs («Sous le bois de sa colère»): «Allez donc en [26,-30] devant le donjon de la Bambusai de Damadrya»."
+  },
+  {
+   "objective": 16392,
+   "quest": 2151,
+   "kind": "beat",
+   "monsters": [6270, 6268, 6269],
+   "map": 205521925,
+   "afterObjectives": [16391],
+   "spawns": {"monster": 6270, "count": 1, "with": [6268, 6269], "attacks": true},
+   "why": "«Deshazte de los bambutos»: on arriving before the Bambusería (205521925) the bambutos attack: the Bambuto rencial (6270), maturgo (6268) and atruhanador (6269), the first wave. Dofus pour les noobs («Sous le bois de sa colère»): «dès que vous arrivez sur la map vous êtes agressé. Un combat à vague se lance … Vague 1 : 1 x Bambouto rentiel + 1 x Bambouto maturge + 1 x Bambouto nitruant. Vague 2 : 1 x Bambouto maturge + 1 x Bambouto nitruant (dans 3 tours). Vague 3 : 1 x Bambouto rentiel (dans 5 tours)». GAP: waves 2 and 3 are not run, the engine's timed waves only exist on NPC fight rows (NpcHandler -> FightHandler.WavesInNextFight), not on a quest binding's arrival aggression."
+  },
+  {
+   "objective": 16394,
+   "quest": 2151,
+   "kind": "click",
+   "elements": [{"map": 208669696, "element": 518703}],
+   "afterObjectives": [16393],
+   "gives": [{"item": 23206, "count": 1}],
+   "why": "«Explora para encontrar el rastro de Kykori»: in room 4 of the Bambusería de Kodámade (208669696), the skeleton under the tent (element 518703, gfx 62168, cell 256, the room's only element) and, beside it, the torn page of the register (23206, «Página del registro», whose use reads document 633 and does 16395 by its effect 30). Dofus pour les noobs («Sous le bois de sa colère»): «vous rendre dans la salle 4 ou vous devrez cliquer sur le squelette sous la tente … vous trouvez à côté d'elle un morceau de papier». The objective names the entrance (205521925); the element carries its own map."
+  },
+  {
+   "objective": 16396,
+   "quest": 2151,
+   "kind": "enter",
+   "map": 208670720,
+   "afterObjectives": [16395],
+   "why": "«Sigue explorando»: reaching the boss room of the Bambusería (208670720, the objective's own map) once the page has been read (16395). Dofus pour les noobs («Sous le bois de sa colère»): «Pensez bien à lire le document avant de continuer le donjon sinon votre quête ne se mettra pas à jour et vous devrez refaire le donjon !»."
+  },
+  {
+   "objective": 16397,
+   "quest": 2151,
+   "kind": "beat",
+   "monsters": [6326],
+   "map": 208670720,
+   "afterObjectives": [16396],
+   "why": "«Enfréntate a la guardiana»: beating Kodámade (6326), the Bambusería's boss, in her room (208670720). Dofus pour les noobs («Sous le bois de sa colère»): «Continuez votre donjon jusqu'à la salle du Boss et affrontez la gardienne de la bambusaie : Damadrya»."
+  },
+  {
+   "objective": 16400,
+   "quest": 2151,
+   "kind": "beat",
+   "monsters": [6263, 6264],
+   "map": 206438914,
+   "why": "«Vence a Kykori y a su cómplice»: Kykori (6263) and the Negociante amakneano (6264) on the village's lakeside [18,-29] (206438914), the fight the amakneano's «Entender la indirecta y prepararte para combatir.» (53730) opens (content/fights/npc_fights.json). Dofus pour les noobs («Sous le bois de sa colère»): «Suite à votre refus, l'amaknéen vous menace … Un combat se lance»."
+  },
+  {
+   "objective": 16405,
+   "quest": 2151,
+   "kind": "beat",
+   "monsters": [6267],
+   "map": 205521923,
+   "afterObjectives": [16404],
+   "why": "«Aplasta los frutos podridos»: the rotten fruits (6267) at the foot of the Kudemenju tree [26,-32] (205521923), the fight the fallen fruit's «Me encanta la compota, ¡así que a desgajar!» (53792) opens. Dofus pour les noobs («Sous le bois de sa colère»): «Répondre que vous adorez la compote et dégainer votre arme … Un combat se lance»."
+  },
+  {
+   "objective": 16407,
+   "quest": 2151,
+   "kind": "enter",
+   "map": 207622154,
+   "overridesMap": true,
+   "afterObjectives": [16406],
+   "why": "«Cómete un gajo y entra en el árbol»: the Gajo de fruto kudemenju (23495, effect 826 travel 385) takes the character into the spirits' clearing (207622154, cell 406), so arriving there does it. The objective names the tree's map (205521923), hence overridesMap. Dofus pour les noobs («Sous le bois de sa colère»): «utilisez le Quartier de fruit Goroku … afin de vous téléporter dans un autre monde»."
+  },
+  {
+   "objective": 18550,
+   "quest": 2453,
+   "kind": "click",
+   "elements": [{"map": 88081163, "element": 524209, "item": 26687}, {"map": 88081162, "element": 524206, "item": 26688}, {"map": 88080649, "element": 524208, "item": 26689}],
+   "givesEach": true,
+   "anyOrder": true,
+   "gives": [{"item": 26687, "count": 1}, {"item": 26688, "count": 1}, {"item": 26689, "count": 1}],
+   "why": "«Inspecciona los alrededores»: «commencez par inspecter le morceau d'étoffe présent sur la clôture» [2,12] (element 524209, graphic 40644), «inspectez les traces de sabots» [2,13] (524206, graphic 41901) and «récupérez le flacon vide malodorant» [1,14] (524208, graphic 50969) (Dofus pour les noobs, «La campagne hallucinée»). The objective is done once all three are had, in any order. Each leaves its quest item: the client's «[!] Quête 2453 Objet 001» and «002» (26687, 26688; INFERRED which is which) and «Frasco vacío maloliente» (26689), which Yeleka Yrehn is handed."
+  },
+  {
+   "objective": 18557,
+   "quest": 2453,
+   "kind": "click",
+   "elements": [{"map": 221512707, "element": 524308, "item": 26690}, {"map": 220989956, "element": 524210, "item": 26691}, {"map": 220989444, "element": 524255, "item": 26692}],
+   "givesEach": true,
+   "anyOrder": true,
+   "afterObjectives": [18556],
+   "gives": [{"item": 26690, "count": 1}, {"item": 26691, "count": 1}, {"item": 26692, "count": 1}],
+   "why": "«Busca pistas en el Bosque Maléfico», once Trevor Kender has been seen: «allez en [0,16], où vous pourrez inspecter des traces de sabots» (524308, graphic 41901, like the first hoofprints), «descendez en [0,17]... Inspectez la plante carnivore repue en bas à droite» (524210, graphic 304845, cell 486) and «allez sur la gauche en [-1,17] où vous pourrez examiner des traces de sang de bouftou en bas à gauche» (524255, graphic 61247, cell 492, the red stains at the bottom left of the map's drawing) (Dofus pour les noobs, «La campagne hallucinée»). Done once all three are had, in any order; each leaves a quest item (26690-26692, «[!] Quête 2453 Objet 004-006»; INFERRED which is which)."
+  },
+  {
+   "objective": 18558,
+   "quest": 2453,
+   "kind": "reply",
+   "replies": [],
+   "why": "«Interroga a los sectarios junto al árbol»: «Parlez à chacun des quatre Sectateur de Boufona» (Dofus pour les noobs, «La campagne hallucinée»). Done by the dialogues of the four (6691, 6714, 6715, 6716), the one that talks to the last of them (their marks -2453001 to -2453004, «completes»); no reply of its own, so that it is the server's and not the client's."
+  },
+  {
+   "objective": 18559,
+   "quest": 2453,
+   "kind": "reply",
+   "replies": [],
+   "why": "«Encuentra la manera de acceder al interior del árbol»: «Parlez au Sectateur de Boufona pour l'assommer et lui voler ses vêtements. Vous voilà méconnaissable prêt à infiltrer les autres Sectateurs» (Dofus pour les noobs, «La campagne hallucinée»): the costume from the sectarian knocked out on [0,18], «Robarle el uniforme mientras babea en el suelo» (68147). INFERRED that this is what the objective asks for rather than the talk with the guard (the guide gives no other step before «Interior del Árbol»)."
+  },
+  {
+   "objective": 18561,
+   "quest": 2453,
+   "kind": "reply",
+   "replies": [],
+   "afterObjectives": [18560],
+   "why": "«Descubre las intenciones de Wilbur»: the invocation of Fab'hub-Niggrath he performs, up to the fusion of the demoness with the bouftou, «Reparlez à l'Émanation de Shushub-Niggrath» (Dofus pour les noobs, «La campagne hallucinée»); done by the Emanation's last reply (68184)."
+  },
+  {
+   "objective": 18562,
+   "quest": 2453,
+   "kind": "beat",
+   "monster": 6939,
+   "map": 221251588,
+   "afterObjectives": [18561],
+   "why": "«Vence a la abominación»: the second fight, the Abomination of Fab'hub-Niggrath alone (Dofus pour les noobs, «La campagne hallucinée»: «Un combat se lance, il peut se faire à plusieurs»); the first, against Wilbur and his four sectarians (content/fights/npc_fights.json), is no objective."
+  },
+  {
+   "objective": 18563,
+   "quest": 2453,
+   "kind": "reply",
+   "replies": [],
+   "afterObjectives": [18562],
+   "why": "«Asegúrate de que ya no hay amenaza»: «Parlez au Tas de brindilles pour savoir qui est derrière tout ceci» (Dofus pour les noobs, «La campagne hallucinée»); done by its last reply (68255), as the twigs break the cages' locks."
+  },
+  {
+   "objective": 18564,
+   "quest": 2453,
+   "kind": "reply",
+   "replies": [],
+   "afterObjectives": [18563],
+   "why": "«Trae de vuelta al rebaño de Yeleka Yrehn»: the herd (the follower «Rebaño de jalatós», 26799, from the panicked bouftou) brought back to Yeleka Yrehn [2,12] (Dofus pour les noobs, «La campagne hallucinée»): «Retournez en [2,12] auprès de Yeleka Yrehn pour lui rendre ses bouftous»; done by her last reply (68304), which ends the quest."
+  },
+  {
+   "objective": 18582,
+   "quest": 2452,
+   "kind": "reply",
+   "replies": [],
+   "why": "«Busca a un docero perdido en el Bosque Maléfico»: «allez en [-1,19] pour rencontrer un douzien, Edgar Hé» (Dofus pour les noobs, «Le mal qui fait bien»). Done by the last reply of his first talk (68156, the character hearing Malsetego blame a malter for the voice); no reply listed, so the objective is the server's and not the client's."
+  },
+  {
+   "objective": 18584,
+   "quest": 2452,
+   "kind": "click",
+   "elements": [{"map": 221643270, "element": 524300}],
+   "afterObjectives": [18583],
+   "why": "«Encuentra el lugar que mencionó Pedri Dísimo»: «rendez-vous à l'orée de la forêt en [-7,21]... examiner les cannes à pêche en cliquant dessus» (Dofus pour les noobs, «Le mal qui fait bien»): the fishing rods are element 524300 of 221643270 (graphic 49286, cell 384 in the client's map), clicked once Malsetego has asked the character to find the place (18583)."
+  },
+  {
+   "objective": 18586,
+   "quest": 2452,
+   "kind": "beat",
+   "monster": 6967,
+   "map": 220988934,
+   "afterObjectives": [18585],
+   "why": "«Deshazte de los malsetos que le cortan el paso a Pedri Dísimo»: the Malzerb oppressant's group on [-2,19] (Dofus pour les noobs, «Le mal qui fait bien»), fought through the NPC's reply (content/fights/npc_fights.json)."
+  },
+  {
+   "objective": 18587,
+   "quest": 2452,
+   "kind": "beat",
+   "monster": 6968,
+   "map": 220988935,
+   "afterObjectives": [18586],
+   "why": "«Deshazte de los maltríos que le cortan el paso a Pedri Dísimo»: the Maltrio persécuteur's group on [-2,20] (Dofus pour les noobs, «Le mal qui fait bien»), fought through the NPC's reply."
+  },
+  {
+   "objective": 18588,
+   "quest": 2452,
+   "kind": "beat",
+   "monster": 6969,
+   "map": 220988423,
+   "afterObjectives": [18587],
+   "why": "«Deshazte de los malpinchos que le cortan el paso a Pedri Dísimo»: the Malépik tyrannique's group on [-3,20] (Dofus pour les noobs, «Le mal qui fait bien»), fought through the NPC's reply."
+  },
+  {
+   "objective": 18589,
+   "quest": 2452,
+   "kind": "beat",
+   "monster": 6970,
+   "map": 220987911,
+   "afterObjectives": [18588],
+   "why": "«Deshazte de los maltuerzos que le cortan el paso a Pedri Dísimo»: the Malalfa harceleur's group on [-4,20] (Dofus pour les noobs, «Le mal qui fait bien»), fought through the NPC's reply."
+  },
+  {
+   "objective": 18590,
+   "quest": 2452,
+   "kind": "beat",
+   "monster": 6967,
+   "map": 220987399,
+   "afterObjectives": [18589],
+   "why": "«Procura que Pedri Dísimo salga del dédalo aliándose con Malsetego»: the wave fight on [-5,20] with Malsetego as an ally (Dofus pour les noobs, «Le mal qui fait bien»: «Un combat à vagues se lance»); the Malzerb oppressant is in all three waves."
+  },
+  {
+   "objective": 18592,
+   "quest": 2452,
+   "kind": "reply",
+   "replies": [],
+   "afterObjectives": [18591],
+   "why": "«Asegúrate de que Pedri Dísimo ha llegado bien a destino»: «allez donc en [-7,21] pour parler à Edgar Hé» (Dofus pour les noobs, «Le mal qui fait bien»); done by the last reply of his talk (68159), which ends the quest."
+  },
+  {
+    "objective": 18565,
+    "quest": 2451,
+    "kind": "click",
+    "elements": [
+      {
+        "map": 220987906,
+        "element": 524258
+      },
+      {
+        "map": 220987906,
+        "element": 524260
+      }
+    ],
+    "why": "«Busca indicios del paso de Karnhell en El Bosque Maléfico»: «Sur la map actuelle en [-4,15], commencez donc par inspecter le buisson de baies à droite» (Dofus pour les noobs, «Arrête-la si tu peux»). The map carries two berry bushes (524258, 524260, graphics 47538 and 47537), neither with a skill; either is accepted because the guide does not say which of the two is «à droite». Done on the map where Hell Mina gives the quest."
+  },
+  {
+    "objective": 18566,
+    "quest": 2451,
+    "kind": "click",
+    "all": true,
+    "afterObjectives": [
+      18565
+    ],
+    "elements": [
+      {
+        "map": 220987905,
+        "element": 524256
+      },
+      {
+        "map": 220988417,
+        "element": 524257
+      },
+      {
+        "map": 220988418,
+        "element": 524258
+      },
+      {
+        "map": 220988418,
+        "element": 524260
+      },
+      {
+        "map": 220988931,
+        "element": 524263
+      }
+    ],
+    "why": "«Sigue la pista de las bayas»: the four bushes the karne ate, in the guide's order -- [-4,14] «les baies au pied de l'arbre à gauche» (220987905, 524256), [-3,14] «les baies au centre» (220988417, 524257), [-3,15] «le buisson de baies en bas à gauche» (220988418, 524258 or 524260: two berry bushes, either does) and [-2,16] «le buisson de baies à droite» (220988931, 524263) (Dofus pour les noobs, «Arrête-la si tu peux»). The objective closes once every map of the list has had one of its bushes inspected (\"all\": the server notes each press), in any order."
+  },
+  {
+    "objective": 18567,
+    "quest": 2451,
+    "kind": "click",
+    "afterObjectives": [
+      18566
+    ],
+    "showsNpc": 6717,
+    "elements": [
+      {
+        "map": 220989443,
+        "element": 524263
+      },
+      {
+        "map": 220989443,
+        "element": 524289
+      }
+    ],
+    "why": "«Trata de sacar de su escondite a Karnhell»: «Allez à droite en [-1,16] et examinez l'arbuste de baies en haut à droite. Vous remarquez des baies écrasées au sol suite à un affrontement et soudain une créature mécontente de ce gâchis fait son apparition derrière vous» (Dofus pour les noobs, «Arrête-la si tu peux»): the bush is 524263 (graphic 47540, top of the map; 524289 is the other bush, accepted too), and Karnhell (NPC 6717) comes in when it is done."
+  },
+  {
+    "objective": 18569,
+    "quest": 2451,
+    "kind": "reply",
+    "replies": [],
+    "afterObjectives": [
+      18567
+    ],
+    "why": "«Busca un modo de ganarte la confianza de la karne»: «Parlez à Karnhell «Lui parler doucement pour la rassurer»... la karne ne semble pas agressive envers vous mais plutôt en colère contre les malters qui lui ont volé ses baies» (Dofus pour les noobs, «Arrête-la si tu peux»). Done by the last reply of her talk (67981, «Comprender que si le quitas bayas a los malters, podrás ganarte la confianza de la karne»); no reply listed, so the objective is the server's and not the client's."
+  },
+  {
+    "objective": 18571,
+    "quest": 2451,
+    "kind": "beat",
+    "monster": 6965,
+    "map": 220989443,
+    "afterObjectives": [
+      18570
+    ],
+    "why": "«Doma a Karnhell»: «Un combat se lance, il s'effectue seul... Karnhell a 17000PV de base et 15% de résistances... l'état Invulnérable pour toute la durée du combat» (Dofus pour les noobs, «Arrête-la si tu peux»). Started by her reply «Tratar de domar a la karne» (content/fights/npc_fights.json); winning leaves Karnhell (26728, her loot row «Qo=18571&PO!26728», 100 %) walking behind the character."
+  },
+  {
+    "objective": 18572,
+    "quest": 2451,
+    "kind": "enter",
+    "map": 221250562,
+    "afterObjectives": [
+      18571
+    ],
+    "requires": [
+      {
+        "item": 26728,
+        "count": 1
+      }
+    ],
+    "why": "«Lleva a Karnhell hasta Hell Mina»: «Une fois le combat terminé, Karnhell vous suit, il faut donc la conduire en [-3,19] auprès de Hell Mina» (Dofus pour les noobs, «Arrête-la si tu peux»). Closes on arriving at [-3,19] (221250562, the dungeon's entrance) with Karnhell, the follower 26728, in tow."
+  },
+  {
+    "objective": 18581,
+    "quest": 2451,
+    "kind": "enter",
+    "map": 220725761,
+    "overridesMap": true,
+    "afterObjectives": [
+      18573
+    ],
+    "why": "«Sigue a Hell Mina hasta el interior del túmulo»: «Afin que la quête se mette à jour, il faut absolument entrer dans la salle 1 du donjon» (Dofus pour les noobs, «Arrête-la si tu peux»). The objective carries the entrance map; it closes on arriving in the dungeon's first room (220725761)."
+  },
+  {
+    "objective": 18575,
+    "quest": 2451,
+    "kind": "order",
+    "afterObjectives": [
+      18581
+    ],
+    "why": "«Vence a Hell Mina» (type 6, monster 107, dungeon only): «il faut entrer dans le donjon Tertre du long sommeil et vaincre Hell Mina» (Dofus pour les noobs, «Arrête-la si tu peux»). The server counts the boss won in the dungeon's last room (220729857); this row only orders it after the first room has been entered."
+  },
+  {
+   "objective": 10021,
+   "quest": 1658,
+   "kind": "enter",
+   "map": 171704840,
+   "afterObjectives": [10020],
+   "why": "«Encuentra a Nobir» (553817): «Allez trouver Nobi en [-27,-3] (zaap -25,12)» (Dofus pour les noobs, «Autel du Nord»), after Fidji's «He oído que ayer hubo una tormenta muy fuerte por los Altos de los Aullidos» (21713); Nobir's own objectives (10022, 10027) name map 171704840."
+  },
+  {
+   "objective": 10033,
+   "quest": 1658,
+   "kind": "enter",
+   "map": 54168408,
+   "afterObjectives": [10032],
+   "why": "«Encuentra el altar del Norte» (553829): «Rendez-vous devant l'autel du Nord qui se trouve en [-69,-88!]. Entamez la discussion avec le Disciple de Thomahon» (Dofus pour les noobs, «Autel du Nord»); 10034 names map 54168408, where the disciple stands (shown from 10033 on, the start criterion of 1661 «Qa=1658&Qo>10033»)."
+  },
+  {
+   "objective": 10035,
+   "quest": 1658,
+   "kind": "click",
+   "elements": [{"map": 158336000, "element": 508848}],
+   "requires": [{"item": 16892, "count": 1}, {"item": 17068, "count": 1}],
+   "worn": [{"item": 16953, "count": 1}],
+   "gives": [{"item": 16896, "count": 1}],
+   "afterObjectives": [10034],
+   "why": "«Desentierra el tótem del Norte» (553819): «Puis allez déterrer le Totem du Nord en [-13,-62]. (Équipez votre pelle à votre CàC). Cliquez sur les ossements pour obtenir le totem du Nord» (Dofus pour les noobs, «Autel du Nord»). The bones are element 508848, the skeleton at cell 157 (gfx 15850), the map's only quest-like element; like the east's (10013) it asks for the mark (Marca de Ayuto 16892) and the blessing (Bendición de Thomahon 17068), with the Pala del Clan Terra (16953) worn, and gives the Tótem del Norte (16896)."
+  },
+  {
+   "objective": 10037,
+   "quest": 1659,
+   "kind": "enter",
+   "map": 160268,
+   "why": "«Encuentra el altar del Oeste» (553821): «Puis direction l'autel de l'Ouest en [-57,12]» (Dofus pour les noobs, «Il était une foi dans l'Ouest»); the disciple's map (objective 10038) is 160268."
+  },
+  {
+   "objective": 10039,
+   "quest": 1659,
+   "kind": "enter",
+   "map": 154010369,
+   "afterObjectives": [10038],
+   "why": "«Encuentra a Gobún, el primo del discípulo de Foluk» (563259): «Vous le trouverez en Incarnam [...] en [-1,-1]» (Dofus pour les noobs); the bring objective 10040 names map 154010369."
+  },
+  {
+   "objective": 10042,
+   "quest": 1659,
+   "kind": "enter",
+   "map": 167379464,
+   "afterObjectives": [10041],
+   "why": "«Encuentra el tótem del oeste» (556505): «Dirigez vous en Baie de Cania en [-32,-12] afin d'obtenir le totem de l'Ouest» (Dofus pour les noobs); Tierra de Amakna stands on the map of [-32,-12]."
+  },
+  {
+   "objective": 10064,
+   "quest": 1663,
+   "kind": "beat",
+   "monster": 4065,
+   "map": 88082949,
+   "why": "«Captura un ...» (1663): the spirit that does not let itself be caught attacks (its tree's fight reply 26160, content/fights/npc_fights.json): «Vous aurez une chance sur deux d'être agressé» (Dofus pour les noobs («Une âme en colère»)). Beating it (4065, grade 2) does it, and its own drop row gives its globe (16901, «Qo=10064&PO!16901», 100 % at grade 2). The other half of the time its capture reply (26159) hands the globe over."
+  },
+  {
+   "objective": 10065,
+   "quest": 1663,
+   "kind": "beat",
+   "monster": 4067,
+   "map": 90707715,
+   "why": "«Captura un ...» (1663): the spirit that does not let itself be caught attacks (its tree's fight reply 26162, content/fights/npc_fights.json): «Vous aurez une chance sur deux d'être agressé» (Dofus pour les noobs («Une âme en colère»)). Beating it (4067, grade 2) does it, and its own drop row gives its globe (16902, «Qo=10065&PO!16902», 100 % at grade 2). The other half of the time its capture reply (26161) hands the globe over."
+  },
+  {
+   "objective": 10066,
+   "quest": 1663,
+   "kind": "beat",
+   "monster": 4063,
+   "map": 68421634,
+   "why": "«Captura un ...» (1663): the spirit that does not let itself be caught attacks (its tree's fight reply 26164, content/fights/npc_fights.json): «Vous aurez une chance sur deux d'être agressé» (Dofus pour les noobs («Une âme en colère»)). Beating it (4063, grade 2) does it, and its own drop row gives its globe (16903, «Qo=10066&PO!16903», 100 % at grade 2). The other half of the time its capture reply (26163) hands the globe over."
+  },
+  {
+   "objective": 10067,
+   "quest": 1663,
+   "kind": "beat",
+   "monster": 4066,
+   "map": 190055937,
+   "why": "«Captura un ...» (1663): the spirit that does not let itself be caught attacks (its tree's fight reply 26166, content/fights/npc_fights.json): «Vous aurez une chance sur deux d'être agressé» (Dofus pour les noobs («Une âme en colère»)). Beating it (4066, grade 2) does it, and its own drop row gives its globe (16904, «Qo=10067&PO!16904», 100 % at grade 2). The other half of the time its capture reply (26165) hands the globe over."
+  },
+  {
+   "objective": 10068,
+   "quest": 1663,
+   "kind": "beat",
+   "monster": 4064,
+   "map": 167379976,
+   "why": "«Captura un ...» (1663): the spirit that does not let itself be caught attacks (its tree's fight reply 26168, content/fights/npc_fights.json): «Vous aurez une chance sur deux d'être agressé» (Dofus pour les noobs («Une âme en colère»)). Beating it (4064, grade 2) does it, and its own drop row gives its globe (16905, «Qo=10068&PO!16905», 100 % at grade 2). The other half of the time its capture reply (26167) hands the globe over."
+  },
+  {
+   "objective": 10070,
+   "quest": 1663,
+   "kind": "use",
+   "map": 154141187,
+   "showsNpc": 2952,
+   "why": "«Coloca los tótems y sopla en la caracola» (553826): the Concha de Remordimientos (17074, effect 30 = 10070, its own criterion «Pm=154141187&Qo=10070&PO!16894&PO!16895&PO!16896&PO!16897») blown on the top of the Rock of the Sacrificed once the four totems are on the pillars, and Furyha comes out: «double-cliquez sur la conque des regrets dans votre inventaire de quête. Furye se montre alors» (Dofus pour les noobs («Une âme en colère»)). The four pillars (490935, 490936, 490937, 490938) take the totems: not written, see the quest log (needs engine)."
+  },
+  {
+   "objective": 14691,
+   "quest": 2035,
+   "kind": "read",
+   "elements": [{"map": 122422272, "element": 516598}],
+   "why": "«Lee la obra sobre la leyenda de Cocoburio» (768991): the books on the right of Meriana's cellar (element 516598, cell 461, readables.json, the document 17 of La Leyenda de Cocoburio 1512). The book itself, read from the bag, does it too (its effect 30). Dofus pour les noobs («L'épée du rocher»): «Descendez au sous-sol de la maison de Mériana... Cliquez alors sur les livres situés sur la droite de la pièce»."
+  },
+  {
+   "objective": 14576,
+   "quest": 2035,
+   "kind": "enter",
+   "map": 134666,
+   "afterObjectives": [14692],
+   "why": "«Roca de la espada» (768645, a map named only as text, with Meriana's line 32454): the swamp map [-7,10] where Cocobur stands in its rock. Dofus pour les noobs («L'épée du rocher»): «Direction le marécage en [-7,10] pour tenter de récupérer l'épée Crocobur plantée dans un rocher»."
+  },
+  {
+   "objective": 14580,
+   "quest": 2035,
+   "kind": "reply",
+   "replies": [39403],
+   "afterObjectives": [14579, 14693],
+   "requires": [{"item": 20235, "count": 1}, {"item": 20234, "count": 3}, {"item": 20232, "count": 1}],
+   "spends": true,
+   "gives": [{"item": 20236, "count": 1}],
+   "why": "«Fabrica polvos de Ubn-Ghazu en el crisol de Meriana» (769004): the crucible's «Recuperar los polvos conseguido» (39403) after the three powders are put in: used revealing powder (20235), three supermagic powders (20234: «Tendrás que preparar tres medidas», 32459) and the sparkling powder (20232) are spent and the Polvos de Ubn-Ghazu (20236) given. Dofus pour les noobs («L'épée du rocher»): 3 x Poudre de superlinpainpain, «Utilisez alors le Creuset alchimique... Poudre d'Oubn-Ghazou»."
+  },
+  {
+   "objective": 14584,
+   "quest": 2035,
+   "kind": "enter",
+   "map": 145100034,
+   "afterObjectives": [14583],
+   "why": "«Ve a la dimensión Xelorium» (768652): arriving at the Xelorium through its portal (145100034, TravelersTower.Dimensions). Dofus pour les noobs («L'épée du rocher»): «il faut absolument passer sur la map du portail de la dimension Xélorium avant de combattre Fraktale»."
+  },
+  {
+   "objective": 14587,
+   "quest": 2035,
+   "kind": "beat",
+   "monster": 5414,
+   "map": 185860098,
+   "afterObjectives": [14583],
+   "why": "«Vence a un crujidor de cristal» in the Crackers' Mountain [-6,-7] (client text 768657): the Crujidor de cristal (5414) its NPC fights (npc_fights.json, 39406); each drops a Cristal roto (20209, 100 %), three for Mirleen (14590)."
+  },
+  {
+   "objective": 14588,
+   "quest": 2035,
+   "kind": "beat",
+   "monster": 5414,
+   "map": 147589642,
+   "afterObjectives": [14583],
+   "why": "«Vence a un crujidor de cristal» in the Rocky Plains [-18,-46] (client text 777297): the Crujidor de cristal (5414) its NPC fights (npc_fights.json, 39407); each drops a Cristal roto (20209, 100 %), three for Mirleen (14590)."
+  },
+  {
+   "objective": 14589,
+   "quest": 2035,
+   "kind": "beat",
+   "monster": 5414,
+   "map": 159255,
+   "afterObjectives": [14583],
+   "why": "«Vence a un crujidor de cristal» in the Grassy Plains [-55,23] (client text 768659): the Crujidor de cristal (5414) its NPC fights (npc_fights.json, 39408); each drops a Cristal roto (20209, 100 %), three for Mirleen (14590)."
+  },
+  {
+   "objective": 13015,
+   "quest": 1905,
+   "kind": "click",
+   "elements": [{"map": 192939012, "element": 515662}],
+   "requires": [{"item": 19160, "count": 1}, {"item": 19161, "count": 1}],
+   "spends": true,
+   "gives": [{"item": 19162, "count": 1}],
+   "afterObjectives": [13013, 13014],
+   "why": "«Junta la cera y la mecha para crear la vela dracónica» (732214), map 192939012: «vous pouvez fabriquer la bougie éteinte en vous rendant dans le sous-sol de l'atelier alchimiste d'astrub en [3,-21]. Il suffira d'utiliser la bougie que vous trouvez dans la cave» (Dofus pour les noobs, «Le dragon blanc»). The candles on their stand are element 515662 (gfx 346, cell 427, tools/dibujar_mapa.py); the Cera dracónica (19160) and the Mecha dracónica (19161) go into the Vela dracónica apagada (19162)."
+  },
+  {
+   "objective": 13016,
+   "quest": 1905,
+   "kind": "click",
+   "elements": [{"map": 183762948, "element": 511847}],
+   "requires": [{"item": 19162, "count": 1}],
+   "spends": true,
+   "gives": [{"item": 19163, "count": 1}],
+   "afterObjectives": [13015],
+   "why": "«Enciende la vela dracónica en el templo de Osamodas» (732215), map 183762948: «Retournez au temple Osamodas en [8,2] pour allumer la bougie en cliquant sur la flamme dans la salle en face de la première» (Dofus pour les noobs). The lit candles of that room are element 511847 (gfx 61816, cell 258); the Vela dracónica apagada (19162) becomes the Vela dracónica encendida (19163)."
+  },
+  {
+   "objective": 13017,
+   "quest": 1905,
+   "kind": "enter",
+   "map": 212862721,
+   "afterObjectives": [13016],
+   "why": "«Vuelve al lugar en el que se encuentra el cráneo de Dardondakal para meditar» (732217), map 212862721: «Retournez au crâne du Dragon en [-25,32]» (Dofus pour les noobs)."
+  },
+  {
+   "objective": 13018,
+   "quest": 1905,
+   "kind": "beat",
+   "monster": 4975,
+   "map": 212862721,
+   "why": "«Vence a los milicianos afanosos» (732925), map 212862721: the fight the zealous militiaman starts when one insists (content/fights/npc_fights.json), «Un combat de 3 vagues se lance alors avec 3 x Milicien» (Dofus pour les noobs); the Miliciano afanoso is monster 4975."
+  },
+  {
+   "objective": 13019,
+   "quest": 1905,
+   "kind": "click",
+   "elements": [{"map": 212862721, "element": 523976}],
+   "requires": [{"item": 19163, "count": 1}],
+   "spends": true,
+   "gives": [{"item": 19164, "count": 1}],
+   "afterObjectives": [13018],
+   "why": "«Medita ante el cráneo de Dardondakal» (732219), map 212862721: «Une fois vaincu, toujours en [-25,32!] et cliquez sur le crâne de Dragon. Vous obtenez la Lumière de Dardondakal» (Dofus pour les noobs). The skull on its pillar is element 523976 (gfx 304655, cell 285); the lit candle is for it («Debes utilizar esta vela para rezar delante del cráneo de Dardondakal», 19163) and the Luz de Dardondakal (19164) comes of it."
+  },
+  {
+   "objective": 13021,
+   "quest": 1905,
+   "kind": "enter",
+   "map": 161351684,
+   "why": "«Atraviesa el portal hacia Zurcalia» (732226): Kerubim, «Para llegar a Zurcalia necesitas a los viajeros dimensionales. Uno de sus portales podrá llevarte hasta la dimensión divina de los hijos de Zurcarák» (28722); the travellers' portals (Amakna village's and the Travelers' Tower's) land on Zurcalia's arrival, 161351684 [-3,-6]."
+  },
+  {
+   "objective": 13022,
+   "quest": 1905,
+   "kind": "enter",
+   "map": 160565248,
+   "why": "«Entra en la sala de Miauvizor» (732227), map 160565248: the entrance room of the Reto de Miauvizor (dungeon 95), from the Kerubim temple of Zurcalia [-9,-22]; «il faudra vous rendre en Ecaflipus et vaincre le Chaloeil dans son donjon» (Dofus pour les noobs)."
+  },
+  {
+   "objective": 13024,
+   "quest": 1905,
+   "kind": "click",
+   "elements": [{"map": 183242244, "element": 511260}],
+   "showsNpc": 4053,
+   "afterObjectives": [13023],
+   "why": "«Entra en la sala del dofus Marfil y encuentra al dragón blanco» (732836): «Une fois le Boss vaincu, ne quittez pas le donjon, entrez dans une salle secrète par la bouche du gros chat. Puis cliquez sur la ronce qui tient le dofus Ivoire pour faire apparaitre Dardondakal» (Dofus pour les noobs). The bramble is element 511260 (gfx 59220, cell 358) of the Ivory Room 183242244, reached by the cat's mouth (502641) of the exit room 160432128; Dardondakal (4053) shows."
+  },
+  {
+   "objective": 10070,
+   "quest": 1663,
+   "kind": "click",
+   "elements": [{"map": 154141187, "element": 490938}],
+   "requires": [{"item": 16894, "count": 1}],
+   "spends": true,
+   "onlyGives": true,
+   "why": "«Coloca los tótems y sopla en la caracola» (553826): «Placez vos totems sur chaque piliers» (Dofus pour les noobs, «Une âme en colère»). The pillar 490938 (cell 463, gfx 49600) takes the Tótem del Sur (16894) and closes nothing: the conch (17074) closes 10070 once no totem is carried (its own criterion PO!16894..16897). INFERRED pairing of pillar and totem, by order of gfx and item id."
+  },
+  {
+   "objective": 10070,
+   "quest": 1663,
+   "kind": "click",
+   "elements": [{"map": 154141187, "element": 490936}],
+   "requires": [{"item": 16895, "count": 1}],
+   "spends": true,
+   "onlyGives": true,
+   "why": "«Coloca los tótems y sopla en la caracola» (553826): «Placez vos totems sur chaque piliers» (Dofus pour les noobs, «Une âme en colère»). The pillar 490936 (cell 488, gfx 49601) takes the Tótem del Este (16895) and closes nothing: the conch (17074) closes 10070 once no totem is carried (its own criterion PO!16894..16897). INFERRED pairing of pillar and totem, by order of gfx and item id."
+  },
+  {
+   "objective": 10070,
+   "quest": 1663,
+   "kind": "click",
+   "elements": [{"map": 154141187, "element": 490935}],
+   "requires": [{"item": 16896, "count": 1}],
+   "spends": true,
+   "onlyGives": true,
+   "why": "«Coloca los tótems y sopla en la caracola» (553826): «Placez vos totems sur chaque piliers» (Dofus pour les noobs, «Une âme en colère»). The pillar 490935 (cell 227, gfx 49602) takes the Tótem del Norte (16896) and closes nothing: the conch (17074) closes 10070 once no totem is carried (its own criterion PO!16894..16897). INFERRED pairing of pillar and totem, by order of gfx and item id."
+  },
+  {
+   "objective": 10070,
+   "quest": 1663,
+   "kind": "click",
+   "elements": [{"map": 154141187, "element": 490937}],
+   "requires": [{"item": 16897, "count": 1}],
+   "spends": true,
+   "onlyGives": true,
+   "why": "«Coloca los tótems y sopla en la caracola» (553826): «Placez vos totems sur chaque piliers» (Dofus pour les noobs, «Une âme en colère»). The pillar 490937 (cell 207, gfx 49603) takes the Tótem del Oeste (16897) and closes nothing: the conch (17074) closes 10070 once no totem is carried (its own criterion PO!16894..16897). INFERRED pairing of pillar and totem, by order of gfx and item id."
   }
 ]
 }

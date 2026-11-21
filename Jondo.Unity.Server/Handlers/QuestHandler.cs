@@ -1,9 +1,9 @@
 using System;
-using System.Net.Sockets;
 using System.Threading.Tasks;
 using Jondo.Unity.Protocol;
 using Jondo.Unity.Server.Managers;
 using Jondo.Unity.Server.Network;
+using Jondo.Unity.World.Quests;
 
 namespace Jondo.Unity.Server.Handlers
 {
@@ -17,35 +17,19 @@ namespace Jondo.Unity.Server.Handlers
     /// repository's own notes filed <c>ieo</c>/<c>idu</c> as interactive-element traffic and
     /// <c>idz</c>/<c>idw</c> as connection extras; that was an old guess and it is wrong.
     ///
-    /// <b>The client is trusted about objectives, and it has to be.</b> <c>idw</c> is the client
+    /// <b>The client is trusted about some objectives, and it has to be.</b> <c>idw</c> is the client
     /// saying an objective is finished, and 5,670 of the game's 15,547 objectives are free text —
-    /// "click the thing" — which the server never sees happen. <see cref="QuestLog.Tick"/> is what
-    /// keeps that from being a hole: it accepts an objective only if it belongs to the step the
-    /// character is actually on, so the worst a lying client can do is finish a quest it already
-    /// has, in the order that quest was written.
+    /// "click the thing" — which the server never sees happen. Two things keep that from being a
+    /// hole: <see cref="QuestClaims"/> takes the client's word only for a free-text objective nothing
+    /// on the server watches, and <see cref="QuestLog.Tick"/> only for one of the step the character
+    /// is actually on.
     /// </remarks>
     public static class QuestHandler
     {
         /// <summary>
-        /// The client asks where a quest has got to (ieo). Answered with idu.
-        /// </summary>
-        public static async Task StepAsync(NetworkStream stream, byte[] payload)
-        {
-            byte[]? ieo = ConnectionProtocol.ReadPayload(payload, Op.Ieo);
-            if (ieo == null) return;
-
-            // Field 2, not 1: measured over 195 frames. Reading field 1 would answer about
-            // whatever happened to be there and look like it worked.
-            int questId = Field(ieo, 2);
-            if (questId == 0) return;
-
-            await Quests.SendStepAsync(stream, questId);
-        }
-
-        /// <summary>
         /// The client says an objective is done (idw): f1 quest, f2 objective.
         /// </summary>
-        public static async Task ObjectiveAsync(NetworkStream stream, byte[] payload)
+        public static async Task ObjectiveAsync(GameSession session, byte[] payload)
         {
             byte[]? idw = ConnectionProtocol.ReadPayload(payload, Op.Idw);
             if (idw == null) return;
@@ -54,7 +38,16 @@ namespace Jondo.Unity.Server.Handlers
             int objectiveId = Field(idw, 2);
             if (questId == 0 || objectiveId == 0) return;
 
-            await Quests.TickAsync(stream, questId, objectiveId);
+            // Only an objective the client alone can know is done (QuestClaims): a fight, an item
+            // handed over or anything else the server works out is not taken on its word.
+            if (!QuestClaims.ClientMayClaim(Quests.Book?.Objective(objectiveId), Quests.Bindings.Of(objectiveId)))
+            {
+                Console.WriteLine($"[Quest] {SessionContext.State.CharacterName} claimed objective {objectiveId} " +
+                                  $"of quest {questId}, which the client cannot finish. Ignored.");
+                return;
+            }
+
+            await Quests.TickAsync(session, questId, objectiveId);
         }
 
         /// <summary>
@@ -67,16 +60,17 @@ namespace Jondo.Unity.Server.Handlers
         /// current step, which is what the box draws, and kept so the box comes back on entering
         /// the world (<see cref="FollowedQuests"/>).
         /// </remarks>
-        public static async Task DetailAsync(NetworkStream stream, byte[] payload)
+        public static async Task DetailAsync(GameSession session, byte[] payload)
         {
+            using var context = SessionContext.Push(session);
             byte[]? iec = ConnectionProtocol.ReadPayload(payload, Op.Iec);
             if (iec == null) return;
 
             int questId = Field(iec, 1);
             if (questId == 0) return;
 
-            if (Quests.Log?.Active(questId) == true) FollowedQuests.Follow(SessionContext.State.CharacterId, questId);
-            await Quests.SendStepAsync(stream, questId);
+            if (session.State.Quests?.Active(questId) == true) FollowedQuests.Follow(session.CharacterId, questId);
+            await Quests.SendStepAsync(session, questId);
         }
 
         /// <summary>
@@ -112,8 +106,9 @@ namespace Jondo.Unity.Server.Handlers
         /// <see cref="Quests.StartAsync"/>, under the same conditions as from an NPC. Only with a
         /// document open: the button exists nowhere else.
         /// </remarks>
-        public static async Task StartFromDocumentAsync(NetworkStream stream, byte[] payload)
+        public static async Task StartFromDocumentAsync(GameSession session, byte[] payload)
         {
+            using var context = SessionContext.Push(session);
             byte[]? ido = ConnectionProtocol.ReadPayload(payload, "ido");
             if (ido == null || !SessionContext.State.DocumentOpen) return;
 
@@ -122,12 +117,14 @@ namespace Jondo.Unity.Server.Handlers
 
             if (Quests.Log?.Active(questId) == true)
             {
-                await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream, ConnectionProtocol.Push(Op.Lqn,
+                await session.SendAsync(ConnectionProtocol.Push(Op.Lqn,
                     ConnectionProtocol.BuildInfoMessage(InfoMessages.Warning, AlreadyStarted)));
                 return;
             }
 
-            if (!await Quests.StartAsync(stream, questId))
+            int itemTemplate = SessionContext.State.DocumentItemTemplate;
+            if (!await Quests.StartSharedAsync(session, questId, () => itemTemplate == 0
+                || (Equipment.HowMany(itemTemplate) > 0 && ItemCriteria.Holds(DatabaseManager.GetItemTemplateCriterion(itemTemplate)))))
                 Console.WriteLine($"[Quests] {SessionContext.State.CharacterName} cannot start quest {questId} from a document.");
         }
 

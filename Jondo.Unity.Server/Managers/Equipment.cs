@@ -95,6 +95,36 @@ namespace Jondo.Unity.Server.Managers
         public static bool IsWorn(int position) => position >= 0 && position <= LastWornSlot;
 
         /// <summary>
+        /// The companion's slot, past the worn ones: the client sends iuk { f3: 28 } when one is
+        /// dropped on the sheet's «Compagnon». It adds nothing to the sheet, but holds one, as a worn
+        /// slot does, and only a companion (super type 23).
+        /// </summary>
+        public const int CompanionSlot = 28;
+        public const int CompanionFamily = 23;
+
+        /// <summary>Whether a slot holds a single item: the worn ones and the companion's.</summary>
+        public static bool HoldsOne(int position) => IsWorn(position) || position == CompanionSlot;
+
+        /// <summary>
+        /// The client's item type 203, «Objeto invisible» (datos/item_types_3.6.10.11.json: super type
+        /// 26, not in the encyclopedia). Ankama uses it for quest progress flags, 3,072 templates,
+        /// most of them named like «[!] Quête 2453 Objet 001».
+        /// </summary>
+        public const int InvisibleType = 203;
+
+        /// <summary>Whether an item type is the invisible one.</summary>
+        public static bool IsInvisibleType(int type) => type == InvisibleType;
+
+        /// <summary>
+        /// Whether an item is a hidden flag (type 203). The server keeps, counts, tests (the PO criterion)
+        /// and removes them like any other item, but the client has no filter of its own and would
+        /// list them in the bag and the chat, which the real server never does: nothing about
+        /// them goes on the wire (<see cref="InvisibleItems"/>). An unknown template is not invisible.
+        /// </summary>
+        public static bool IsInvisible(int gid)
+            => Forgemagic.TemplateOf(gid) is { } template && IsInvisibleType(template.Type);
+
+        /// <summary>
         /// Whether what is in a slot adds to the sheet: the worn ones, and the bonus slots past them
         /// -- a candy's boost food, a blessing (<see cref="BonusSlots"/>) --, which are worn by nobody
         /// and drawn on nobody but count all the same.
@@ -111,6 +141,7 @@ namespace Jondo.Unity.Server.Managers
             [1] = new[] { 0 }, [2] = new[] { 1 }, [3] = new[] { 2, 4 }, [4] = new[] { 3 }, [5] = new[] { 5 },
             [7] = new[] { 15 }, [10] = new[] { 6 }, [11] = new[] { 7 }, [12] = new[] { 8 },
             [DofusFamily] = new[] { 9, 10, 11, 12, 13, 14 },
+            [CompanionFamily] = new[] { CompanionSlot },
         };
 
         /// <summary>The family of the dofus, the trophies and the prysmaradites: one of each is worn.</summary>
@@ -127,7 +158,7 @@ namespace Jondo.Unity.Server.Managers
         public static bool MayGoIn(int template, int position)
         {
             if (BonusSlots.IsBonusSlot(position)) return false;
-            if (!IsWorn(position)) return true;
+            if (!HoldsOne(position)) return true;
 
             int? family = RandomLoot.FamilyOf(Forgemagic.TemplateOf(template)?.Type ?? 0);
             // With no item types read, nothing has a family: refusing then would undress everybody.
@@ -196,6 +227,43 @@ namespace Jondo.Unity.Server.Managers
                 Console.WriteLine($"[Equipment] Could not read what {characterId} is wearing: {ex.Message}");
             }
 
+            return worn;
+        }
+
+        /// <summary>
+        /// What a character wears, read out of the database without touching anybody's session:
+        /// the player card's equipment tab, for a character online or not.
+        /// </summary>
+        public static List<Item> WornItemsOf(long characterId)
+        {
+            var worn = new List<Item>();
+            try
+            {
+                using var connection = new Microsoft.Data.Sqlite.SqliteConnection(DatabaseManager.WorldConnectionString);
+                connection.Open();
+                var command = connection.CreateCommand();
+                command.CommandText = "SELECT Uid, Gid, Quantity, Position, Effects FROM CharacterItems " +
+                                      "WHERE CharacterId = $id AND Position BETWEEN 0 AND $last ORDER BY Position;";
+                command.Parameters.AddWithValue("$id", characterId);
+                command.Parameters.AddWithValue("$last", LastWornSlot);
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                {
+                    var item = new Item
+                    {
+                        Uid = reader.GetInt64(0),
+                        Template = reader.GetInt32(1),
+                        Quantity = reader.IsDBNull(2) ? 1 : reader.GetInt32(2),
+                        Position = reader.GetInt32(3),
+                    };
+                    if (!reader.IsDBNull(4)) ReadEffects(reader.GetString(4), item);
+                    worn.Add(item);
+                }
+            }
+            catch (Exception ex)
+            {
+                Program.LogDebug($"[Equipment] Could not read what character {characterId} wears: {ex.Message}");
+            }
             return worn;
         }
 
@@ -450,7 +518,7 @@ namespace Jondo.Unity.Server.Managers
         public static List<Item> Occupants(int position, long exceptUid = 0)
         {
             var busy = new List<Item>();
-            if (!IsWorn(position)) return busy;
+            if (!HoldsOne(position)) return busy;
 
             foreach (var item in Items.Values)
             {
@@ -520,7 +588,7 @@ namespace Jondo.Unity.Server.Managers
 
             foreach (var item in Items.Values)
             {
-                if (!IsWorn(item.Position)) continue;
+                if (!HoldsOne(item.Position)) continue;
                 if (taken.Add(item.Position)) continue;
 
                 item.Position = Bag;
@@ -605,6 +673,9 @@ namespace Jondo.Unity.Server.Managers
         public static async Task<bool> GiveAsync(NetworkStream stream, int gid, int quantity)
             => await GrantAsync(stream, gid, quantity) != null;
 
+        public static async Task<bool> GiveAsync(GameSession session, int gid, int quantity)
+            => await GrantAsync(session, gid, quantity) != null;
+
         /// <summary>
         /// The bag's stack an item handed over joins, or null for a new one: the same template with
         /// the same effects, unless it is a pet or a piece worn, each of which is its own.
@@ -628,9 +699,12 @@ namespace Jondo.Unity.Server.Managers
         /// answers with the uid and the effects — and it is the same method rather than a second
         /// one so that the two can never disagree about whether the client was told.
         /// </remarks>
-        public static async Task<HavenBagStore.StoredItem?> GrantAsync(NetworkStream stream,
-                                                                       int gid, int quantity)
+        public static Task<HavenBagStore.StoredItem?> GrantAsync(NetworkStream stream, int gid, int quantity)
+            => GrantAsync(SessionContext.Current, gid, quantity);
+
+        private static async Task<HavenBagStore.StoredItem?> GrantAsync(GameSession session, int gid, int quantity)
         {
+            using var context = SessionContext.Push(session);
             if (!DatabaseManager.TryGetItemTemplateEffects(gid, out string effects)) return null;
 
             // A pet comes into the world at level 0, and grows (Pets).
@@ -643,8 +717,9 @@ namespace Jondo.Unity.Server.Managers
             var onto = StackFor(gid, effects);
             if (onto != null && Rewrite(onto, onto.Quantity + quantity, onto.Effects))
             {
-                await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                    ConnectionProtocol.Push(Op.Ivj, ConnectionProtocol.BuildItemQuantity(onto.Uid, onto.Quantity)));
+                if (!InvisibleItems.Conceal(gid, onto.Uid))
+                    await session.SendAsync(new Jondo.Unity.Protocol.Game.ObjectQuantityEvent(
+                        Jondo.Unity.Protocol.Game.ObjectOrigin.OriginUndefined, new(checked((int)onto.Uid), onto.Quantity)));
                 return new HavenBagStore.StoredItem { Uid = onto.Uid, Gid = gid, Quantity = quantity, Effects = effects };
             }
 
@@ -678,8 +753,9 @@ namespace Jondo.Unity.Server.Managers
                 Effects = effects,
             };
 
-            await Jondo.Protocol.NetworkMessage.WriteFrameAsync(stream,
-                ConnectionProtocol.Push(Op.Iua, ConnectionProtocol.BuildItemArrived(3, granted)));
+            if (!InvisibleItems.Conceal(gid, uid))
+                await session.SendAsync(new Jondo.Unity.Protocol.Game.ObjectAddedEvent(
+                    Jondo.Unity.Protocol.Game.ObjectOrigin.OriginUndefined, InventoryMessages.FromCatalogue.InventoryItem(Items[uid])));
             return granted;
         }
 

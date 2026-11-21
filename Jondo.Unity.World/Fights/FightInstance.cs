@@ -26,6 +26,13 @@ namespace Jondo.Unity.World.Fights
         public FightRules Reglas { get; set; } = FightRules.ContraMonstruos;
 
         /// <summary>
+        /// A character's turn in this fight, in tenths, when the group fought sets one
+        /// (groups.json «playerTurn»): the guided tutorial's Puch celestial gives ten minutes.
+        /// 0 leaves it to <see cref="Reglas"/>.
+        /// </summary>
+        public int PlayerTurn { get; set; }
+
+        /// <summary>
         /// Whether this monster fight began from a soul stone, or null when its origin is unknown.
         /// No fight here starts from a soul stone yet, so every fight is a plain one unless told
         /// otherwise: left null, the 1,629 loot rows that ask «Ms=0» would never drop.
@@ -868,7 +875,8 @@ namespace Jondo.Unity.World.Fights
         {
             if (State != FightState.Placement) return JoinRefusal.NotInPlacement;
             if (team != Azules && team != Rojos) return JoinRefusal.NoSuchTeam;
-            if (DefendingAllianceId == 0 && Bando(team).Exists(f => f.IsMonster && !f.EsInvocado))
+            // A companion does not make a side the monsters': its master's friends join him.
+            if (DefendingAllianceId == 0 && Bando(team).Exists(f => f.IsMonster && !f.EsInvocado && !f.IsCompanion))
                 return JoinRefusal.MonsterTeam;
             if (OptionOn(team, OptionClosed)) return JoinRefusal.Closed;
             if (PeopleIn(team) >= maxPeoplePerTeam) return JoinRefusal.TeamFull;
@@ -922,9 +930,19 @@ namespace Jondo.Unity.World.Fights
             Rojo.Remove(who);
             ForgetPreparation(fighterId);
             DeDondeVenian.Remove(fighterId);
+            // His companion goes with him: nobody would play it.
+            foreach (var companion in Todos.Where(f => f.IsCompanion && f.DrivenBy == fighterId).ToList())
+            {
+                Azul.Remove(companion);
+                Rojo.Remove(companion);
+                CompanionsGone.Add(companion.Id);
+            }
             UpdateTurnOrder();
             return true;
         }
+
+        /// <summary>The companions taken off with their master as he left the placement, to tell the clients.</summary>
+        public List<long> CompanionsGone { get; } = new List<long>();
 
         /// <summary>
         /// The monster side rebuilt from scratch: every monster that is not a summon goes, and
@@ -1157,6 +1175,13 @@ namespace Jondo.Unity.World.Fights
         public Dictionary<long, long> Telefrags { get; set; } = new Dictionary<long, long>();
 
         /// <summary>
+        /// The pairs a teleport swapped in the whole cast being resolved, its sub-casts' included,
+        /// the lower id first. Each sub-cast has its own <see cref="Telefrags"/>, and Arenas del
+        /// Tiempo's bounce swapped back at once the two its blow had just swapped.
+        /// </summary>
+        public HashSet<(long, long)> SwapsOfTheCast { get; set; } = new HashSet<(long, long)>();
+
+        /// <summary>
         /// The dead, in the order they fell: "Invoca al último aliado muerto" (780, 1034) brings
         /// back the last of the caster's side.
         /// </summary>
@@ -1206,6 +1231,16 @@ namespace Jondo.Unity.World.Fights
         /// doomed fire still answered the jump's later rows as if it were there.
         /// </summary>
         public HashSet<long> StruckDownThisCast { get; set; } = new HashSet<long>();
+
+        /// <summary>
+        /// The states a fighter held just before the rows that expire at the start of ITS turn were
+        /// swept, for as long as the glyphs under it are fired (null otherwise). A glyph's state
+        /// conditions (E, e) read them as held: Karnhell's «Tu m'attraperas pas !» climbs her from
+        /// Chasseur chassé I to V by "state I -> II" rows that last ONE round, so the glyph has to
+        /// see the I that falls at this very turn start, or she is back at I every turn and the
+        /// guide's «la monter en état V» is out of reach.
+        /// </summary>
+        public (long Id, HashSet<int> States)? StatesBeforeTheSweep { get; set; }
 
         /// <summary>
         /// Whether the cast being resolved went through a portal: what the masks' R and r ask,

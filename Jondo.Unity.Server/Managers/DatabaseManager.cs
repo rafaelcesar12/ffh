@@ -328,6 +328,8 @@ namespace Jondo.Unity.Server
                 ";
                 createCharacters.ExecuteNonQuery();
 
+                Managers.ZaapDiscoveries.EnsureTable(worldConnection);
+
                 // Migration: Ensure Orientation column exists
                 try
                 {
@@ -2321,7 +2323,7 @@ namespace Jondo.Unity.Server
             "CharacterChallenges", "CharacterQuests", "CharacterAchievements",
             "CharacterKeyring", "CharacterDungeonProgress", "CharacterElements",
             "CharacterEnergy", "CharacterExperienceLimit",
-            "CharacterSavedPositions", "CharacterPresets", "CharacterItemShortcuts", "CharacterPendingChanges",
+            "CharacterSavedPositions", "CharacterZaapDiscoveries", "CharacterPresets", "CharacterItemShortcuts", "CharacterPendingChanges",
         };
 
         /// <summary>The ids of deleted characters, so that none is ever handed out again.</summary>
@@ -2868,10 +2870,13 @@ namespace Jondo.Unity.Server
         }
 
         public static void SaveCurrentCharacter()
+            => SaveCharacter(Jondo.Unity.Server.Network.SessionContext.State);
+
+        internal static void SaveCharacter(SessionState state)
         {
             using var connection = new SqliteConnection(WorldConnectionString);
             connection.Open();
-            var (savedMap, savedCell) = PlaceToSave(Jondo.Unity.Server.Network.SessionContext.State);
+            var (savedMap, savedCell) = PlaceToSave(state);
 
             var command = connection.CreateCommand();
             command.CommandText = @"
@@ -2884,26 +2889,26 @@ namespace Jondo.Unity.Server
                     Level = $lvl, Kamas = $kamas, Experience = $xp
                 WHERE Id = $charId;
             ";
-            command.Parameters.AddWithValue("$charId", Jondo.Unity.Server.Network.SessionContext.State.CharacterId);
+            command.Parameters.AddWithValue("$charId", state.CharacterId);
             command.Parameters.AddWithValue("$mapId", savedMap);
             command.Parameters.AddWithValue("$cellId", savedCell);
-            command.Parameters.AddWithValue("$orientation", Jondo.Unity.Server.Network.SessionContext.State.Orientation);
-            command.Parameters.AddWithValue("$pts", Jondo.Unity.Server.Network.SessionContext.State.CharacterRemainingPoints);
-            command.Parameters.AddWithValue("$vit", Jondo.Unity.Server.Network.SessionContext.State.StatVitality);
-            command.Parameters.AddWithValue("$wis", Jondo.Unity.Server.Network.SessionContext.State.StatWisdom);
-            command.Parameters.AddWithValue("$str", Jondo.Unity.Server.Network.SessionContext.State.StatStrength);
-            command.Parameters.AddWithValue("$int", Jondo.Unity.Server.Network.SessionContext.State.StatIntelligence);
-            command.Parameters.AddWithValue("$cha", Jondo.Unity.Server.Network.SessionContext.State.StatChance);
-            command.Parameters.AddWithValue("$agi", Jondo.Unity.Server.Network.SessionContext.State.StatAgility);
-            command.Parameters.AddWithValue("$svit", Jondo.Unity.Server.Network.SessionContext.State.ScrolledVitality);
-            command.Parameters.AddWithValue("$swis", Jondo.Unity.Server.Network.SessionContext.State.ScrolledWisdom);
-            command.Parameters.AddWithValue("$sstr", Jondo.Unity.Server.Network.SessionContext.State.ScrolledStrength);
-            command.Parameters.AddWithValue("$sint", Jondo.Unity.Server.Network.SessionContext.State.ScrolledIntelligence);
-            command.Parameters.AddWithValue("$scha", Jondo.Unity.Server.Network.SessionContext.State.ScrolledChance);
-            command.Parameters.AddWithValue("$sagi", Jondo.Unity.Server.Network.SessionContext.State.ScrolledAgility);
-            command.Parameters.AddWithValue("$lvl", Jondo.Unity.Server.Network.SessionContext.State.CharacterLevel);
-            command.Parameters.AddWithValue("$kamas", Jondo.Unity.Server.Network.SessionContext.State.Kamas);
-            command.Parameters.AddWithValue("$xp", Jondo.Unity.Server.Network.SessionContext.State.Experience);
+            command.Parameters.AddWithValue("$orientation", state.Orientation);
+            command.Parameters.AddWithValue("$pts", state.CharacterRemainingPoints);
+            command.Parameters.AddWithValue("$vit", state.StatVitality);
+            command.Parameters.AddWithValue("$wis", state.StatWisdom);
+            command.Parameters.AddWithValue("$str", state.StatStrength);
+            command.Parameters.AddWithValue("$int", state.StatIntelligence);
+            command.Parameters.AddWithValue("$cha", state.StatChance);
+            command.Parameters.AddWithValue("$agi", state.StatAgility);
+            command.Parameters.AddWithValue("$svit", state.ScrolledVitality);
+            command.Parameters.AddWithValue("$swis", state.ScrolledWisdom);
+            command.Parameters.AddWithValue("$sstr", state.ScrolledStrength);
+            command.Parameters.AddWithValue("$sint", state.ScrolledIntelligence);
+            command.Parameters.AddWithValue("$scha", state.ScrolledChance);
+            command.Parameters.AddWithValue("$sagi", state.ScrolledAgility);
+            command.Parameters.AddWithValue("$lvl", state.CharacterLevel);
+            command.Parameters.AddWithValue("$kamas", state.Kamas);
+            command.Parameters.AddWithValue("$xp", state.Experience);
             command.ExecuteNonQuery();
         }
 
@@ -3368,16 +3373,7 @@ namespace Jondo.Unity.Server
                 using var connection = new SqliteConnection(WorldConnectionString);
                 connection.Open();
 
-                var command = connection.CreateCommand();
-                command.CommandText = "INSERT INTO CharacterItems " +
-                                      "(CharacterId, Uid, Gid, Quantity, Position, Effects) " +
-                                      "VALUES ($id, $uid, $gid, $n, $pos, $e);";
-                command.Parameters.AddWithValue("$id", characterId);
-                command.Parameters.AddWithValue("$uid", uid);
-                command.Parameters.AddWithValue("$gid", gid);
-                command.Parameters.AddWithValue("$n", Math.Max(1, quantity));
-                command.Parameters.AddWithValue("$pos", position);
-                command.Parameters.AddWithValue("$e", (object?)effects ?? DBNull.Value);
+                using var command = NewCharacterItem(connection, uid, characterId, gid, quantity, position, effects);
                 command.ExecuteNonQuery();
                 return true;
             }
@@ -3390,6 +3386,67 @@ namespace Jondo.Unity.Server
             catch (Exception ex)
             {
                 Console.WriteLine($"[SQLite] Could not create item {uid}: {ex.Message}");
+                return false;
+            }
+        }
+
+        private static SqliteCommand NewCharacterItem(SqliteConnection connection, long uid, long characterId,
+                                                      int gid, int quantity, int position, string? effects)
+        {
+            var command = connection.CreateCommand();
+            command.CommandText = "INSERT INTO CharacterItems (CharacterId, Uid, Gid, Quantity, Position, Effects) " +
+                                  "VALUES ($id, $uid, $gid, $n, $pos, $e);";
+            command.Parameters.AddWithValue("$id", characterId);
+            command.Parameters.AddWithValue("$uid", uid);
+            command.Parameters.AddWithValue("$gid", gid);
+            command.Parameters.AddWithValue("$n", Math.Max(1, quantity));
+            command.Parameters.AddWithValue("$pos", position);
+            command.Parameters.AddWithValue("$e", (object?)effects ?? DBNull.Value);
+            return command;
+        }
+
+        internal static bool BuyWithTokens(long characterId, long uid, int gid, int quantity, string effects,
+                                           long tokenUid, int tokenGid, int price, int expectedBalance)
+        {
+            try
+            {
+                using var connection = new SqliteConnection(WorldConnectionString);
+                connection.Open();
+                using var transaction = connection.BeginTransaction();
+                using var debit = connection.CreateCommand();
+                debit.Transaction = transaction;
+                debit.CommandText = """
+                    UPDATE CharacterItems SET Quantity = Quantity - $price
+                    WHERE CharacterId = $id AND Uid = $token AND Gid = $currency
+                      AND Position = $bag AND Quantity = $balance AND Quantity >= $price
+                    RETURNING Quantity;
+                    """;
+                debit.Parameters.AddWithValue("$price", price);
+                debit.Parameters.AddWithValue("$id", characterId);
+                debit.Parameters.AddWithValue("$token", tokenUid);
+                debit.Parameters.AddWithValue("$currency", tokenGid);
+                debit.Parameters.AddWithValue("$bag", Equipment.Bag);
+                debit.Parameters.AddWithValue("$balance", expectedBalance);
+                if (debit.ExecuteScalar() is not long balance) return false;
+                if (balance == 0)
+                {
+                    using var empty = connection.CreateCommand();
+                    empty.Transaction = transaction;
+                    empty.CommandText = "DELETE FROM CharacterItems WHERE CharacterId = $id AND Uid = $token AND Quantity = 0;";
+                    empty.Parameters.AddWithValue("$id", characterId);
+                    empty.Parameters.AddWithValue("$token", tokenUid);
+                    empty.ExecuteNonQuery();
+                }
+
+                using var item = NewCharacterItem(connection, uid, characterId, gid, quantity, Equipment.Bag, effects);
+                item.Transaction = transaction;
+                item.ExecuteNonQuery();
+                transaction.Commit();
+                return true;
+            }
+            catch (SqliteException ex)
+            {
+                Console.WriteLine($"[SQLite] Token purchase of item {gid} could not be saved: {ex.Message}");
                 return false;
             }
         }

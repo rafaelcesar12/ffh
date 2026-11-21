@@ -37,6 +37,13 @@ namespace Jondo.Unity.Server.Network
         /// <summary>The slot this request speaks for, read from its body: 0 is jondoplay itself.</summary>
         [ThreadStatic] private static int _testSlot;
 
+        /// <summary>
+        /// The hero this request acts as, read from its body's «hero» (his id or his name): one of
+        /// the heroes connected beside the slot's character, whose session every route then uses
+        /// -- his quests, his bag --, without switching to him in the client. Empty: the slot's own.
+        /// </summary>
+        [ThreadStatic] private static string? _testHero;
+
         private static string TestLoginNow => _testSlot <= 0 ? TestLogin : $"{TestLogin}{_testSlot:D2}";
 
         private const int TestTimeoutMs = 20000;
@@ -50,13 +57,19 @@ namespace Jondo.Unity.Server.Network
                 return Mal(401, "key");
 
             _testSlot = (int)Math.Clamp(Numero(cuerpo, "slot"), 0, 99);
+            _testHero = Texto(cuerpo, "hero") is { Length: > 0 } heroName ? heroName
+                      : Numero(cuerpo, "hero") is > 0 and var heroId ? heroId.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                      : null;
             try
             {
+                if (_testHero != null && TestSessionOnline() == null)
+                    return Mal(404, "hero: not one of the heroes connected beside the slot's character");
                 return TestDispatch(ruta.Substring(Prefijo.Length + "test/".Length), cuerpo);
             }
             finally
             {
                 _testSlot = 0;
+                _testHero = null;
             }
         }
 
@@ -87,10 +100,12 @@ namespace Jondo.Unity.Server.Network
                 "scenario" => TestScenario(cuerpo),
                 "scenarios" => TestScenarios(cuerpo),
                 "team" => TestTeam(cuerpo),
+                "monsters" => TestMonsters(cuerpo),
                 "state" => TestState(cuerpo),
                 "items" => TestItemList(cuerpo),
                 "item" => TestItem(cuerpo),
                 "equip" => TestEquip(cuerpo),
+                "align" => TestAlign(cuerpo),
                 "finish" => TestFinish(cuerpo),
                 "crit" => TestCrit(cuerpo),
                 "kill" => TestKill(cuerpo),
@@ -108,6 +123,12 @@ namespace Jondo.Unity.Server.Network
                 "quest" => TestQuest(cuerpo),
                 "season" => TestSeason(cuerpo),
                 "reload" => TestReload(),
+                // A slot played without the Dofus client, and the console (ControlApiHeadless.cs).
+                "headless" => TestHeadless(cuerpo),
+                "headless/stop" => TestHeadlessStop(),
+                "headless/send" => TestHeadlessSend(cuerpo),
+                "headless/frames" => TestHeadlessFrames(cuerpo),
+                "logs" => TestLogs(cuerpo),
                 _ => Mal(404, "ruta"),
             };
         }
@@ -202,7 +223,11 @@ namespace Jondo.Unity.Server.Network
         private static GameSession? TestSessionOnline()
         {
             long account = DatabaseManager.AccountIdOf(TestLoginNow);
-            return SessionRegistry.All().FirstOrDefault(s => s.AccountId == account && s.IsInWorld);
+            var own = SessionRegistry.All().FirstOrDefault(s => s.AccountId == account && s.IsInWorld);
+            if (own == null || _testHero == null) return own;
+            return Heroes.Of(own.CharacterId).FirstOrDefault(h =>
+                h.CharacterId.ToString(System.Globalization.CultureInfo.InvariantCulture) == _testHero
+                || string.Equals(h.Session.State.CharacterName, _testHero, StringComparison.OrdinalIgnoreCase))?.Session;
         }
 
         /// <summary>How far the slot's client got: connected to the game, and in the world.</summary>
@@ -423,6 +448,37 @@ namespace Jondo.Unity.Server.Network
                 : Mal(500, "not-started");
         }
 
+        /// <summary>
+        /// A fight against the monsters given, as an NPC's fight would start it: { foes: [monster
+        /// id...], grade?: n, map?: arena }. For the fights a quest reaches only after a long
+        /// conversation (the sectarians of "El campo alucinado").
+        /// </summary>
+        private static Respuesta TestMonsters(string body)
+        {
+            var session = TestSessionOnline();
+            if (session == null || session.Stream == null) return Mal(404, "offline");
+            if (FightHandler.FightOf(session.State.CharacterId) != null) return Mal(409, "in-fight");
+            var foes = new List<int>();
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(string.IsNullOrEmpty(body) ? "{}" : body);
+                if (doc.RootElement.TryGetProperty("foes", out var a) && a.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    foes = a.EnumerateArray().Where(x => x.ValueKind == System.Text.Json.JsonValueKind.Number).Select(x => x.GetInt32()).ToList();
+            }
+            catch (System.Text.Json.JsonException) { return Mal(400, "json"); }
+            int grade = (int)Numero(body, "grade");
+            var group = MobSpawnManager.ComposeOffMap(foes.Select(m => (m, grade)).ToList());
+            if (group == null) return Mal(404, "no-monsters");
+            long arena = Numero(body, "map");
+            var lines = RunInSession(session, async stream =>
+            {
+                await FightHandler.InitiateFightFromMobCollision(stream, group, session.State.MapId,
+                    arenaMapId: arena > 0 ? arena : 0);
+            });
+            var fight = FightHandler.FightOf(session.State.CharacterId);
+            return fight != null ? Bien(new { id = fight.FightId, lines }) : Mal(500, "not-started");
+        }
+
         /// <summary>The monster groups on the character's map: what a click on one attacks (hqa, its id).</summary>
         private static Respuesta TestGroups()
         {
@@ -514,10 +570,11 @@ namespace Jondo.Unity.Server.Network
                         // In an NPC's barter, the ready button makes the swap.
                         else if (op == Op.Kep && SessionContext.State.Workshop == null && SessionContext.State.Barter != null)
                             await NpcBarterHandler.ReadyAsync(stream, frame);
-                        else if (op == Op.Kep) await WorkshopHandler.CraftAsync(stream, frame);
+                        else if (op == Op.Kep) await WorkshopHandler.CraftAsync(session, frame);
                         // An NPC clicked for one of its actions (Gobiere Trokeur's «Intercambiar»), and a
                         // stack laid on his barter's table.
-                        else if (op == Op.Iov) await NpcHandler.InteractAsync(stream, frame);
+                        else if (op == Op.Iov && GameNodeProxy.DecodeRequest(session, frame)?.Content is Jondo.Unity.Protocol.Game.NpcGenericActionRequest action)
+                            await NpcHandler.InteractAsync(session, action);
                         // Or on a workshop's bench, the one opened last: a paper and a thing on the
                         // gift-wrapping table, though a harness never closed an earlier barter.
                         else if (op == Op.Kcr)
@@ -526,7 +583,7 @@ namespace Jondo.Unity.Server.Network
                             else await NpcBarterHandler.MoveAsync(stream, frame);
                         }
                         // An item used from the bag: a quest's potion drunk before talking to someone.
-                        else if (op == Op.Iuu) await ItemUseHandler.UseAsync(stream, frame);
+                        else if (op == Op.Iuu) await ItemUseHandler.UseAsync(session, frame);
                         // An item put on or taken off, as dragging it to its slot sends: a quest's cannon
                         // that asks for a helmet and wings worn.
                         else if (op == Op.Iuk) await EquipmentHandler.MoveAsync(stream, frame);
@@ -540,7 +597,9 @@ namespace Jondo.Unity.Server.Network
                         // keyboard does not reach a harness client in the background.
                         else if (op == Op.Kee) await TradeHandler.KamasAsync(stream, frame);
                         // A document's «start the quest» button (a wanted poster's), with the document open.
-                        else if (op == "ido") await QuestHandler.StartFromDocumentAsync(stream, frame);
+                        else if (op == "ido") await QuestHandler.StartFromDocumentAsync(session, frame);
+                        // The alliance editor's founding, without walking to the Temple's door.
+                        else if (op == Op.Mdk) await AllianceHandler.CreateAsync(stream, frame);
                         else throw new InvalidOperationException($"op {op} is not one the harness sends");
                     }
                     finally
@@ -881,22 +940,37 @@ namespace Jondo.Unity.Server.Network
         }
 
         /// <summary>
-        /// Any client message the harness may send: its op and its varint fields, { "fields": { "1": 300, "4": 161 } }.
+        /// Any client message the harness may send: its op and its fields by number -- a number is a
+        /// varint, a string a string, an object a submessage: { "fields": { "1": 300, "2": "x", "3": { "1": 4 } } }.
         /// </summary>
         private static Respuesta TestInject(string cuerpo)
         {
             var session = TestSessionOnline();
             if (session == null || session.Stream == null) return Mal(404, "offline");
             string op = Texto(cuerpo, "op");
-            var body = Pb.New();
+            byte[] body;
             using (var doc = System.Text.Json.JsonDocument.Parse(cuerpo))
-            {
-                if (doc.RootElement.TryGetProperty("fields", out var fields) && fields.ValueKind == System.Text.Json.JsonValueKind.Object)
-                    foreach (var field in fields.EnumerateObject().OrderBy(f => int.Parse(f.Name)))
-                        body.Var(int.Parse(field.Name), field.Value.GetInt64());
-            }
-            var lines = RunAsClient(session, op, body.Build());
+                body = doc.RootElement.TryGetProperty("fields", out var fields) && fields.ValueKind == System.Text.Json.JsonValueKind.Object
+                    ? InjectedFields(fields).Build()
+                    : Array.Empty<byte>();
+            var lines = RunAsClient(session, op, body);
             return Bien(new { lines, fight = FightView(session) });
+        }
+
+        private static Pb InjectedFields(System.Text.Json.JsonElement fields)
+        {
+            var body = Pb.New();
+            foreach (var field in fields.EnumerateObject().OrderBy(f => int.Parse(f.Name)))
+            {
+                int number = int.Parse(field.Name);
+                switch (field.Value.ValueKind)
+                {
+                    case System.Text.Json.JsonValueKind.String: body.Str(number, field.Value.GetString() ?? ""); break;
+                    case System.Text.Json.JsonValueKind.Object: body.Msg(number, InjectedFields(field.Value)); break;
+                    default: body.Var(number, field.Value.GetInt64()); break;
+                }
+            }
+            return body;
         }
 
         /// <summary>

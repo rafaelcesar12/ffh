@@ -118,11 +118,12 @@ namespace Jondo.Unity.Server.Handlers
         }
 
         /// <summary>The builds, on entering the world (ihb). Empty for a character with none, as a new one gets it.</summary>
-        public static async Task SendListAsync(NetworkStream stream)
+        public static async Task SendListAsync(GameSession session)
         {
-            var character = Character();
+            using var context = SessionContext.Push(session);
+            var character = DatabaseManager.GetCharacterById(session.CharacterId);
             if (character == null) return;
-            await SendAsync(stream, "ihb", PresetProtocol.BuildList(character, CharacterPresets.Of(character.Id)));
+            await session.SendAsync(PresetMessages.Live.Snapshot(session, character, CharacterPresets.Of(character.Id)));
         }
 
         // ─── Creating, saving, deleting ─────────────────────────────────────────
@@ -374,8 +375,11 @@ namespace Jondo.Unity.Server.Handlers
         /// items --, in the capture's order: kub, the variants (hng), the bar (itg), each item
         /// (ivq...), the sheet again and ihq. Not in a fight.
         /// </summary>
-        public static async Task EquipAsync(NetworkStream stream, byte[] payload, long accountId)
+        public static async Task EquipAsync(GameSession owner, byte[] payload)
         {
+            using var context = SessionContext.Push(owner);
+            var stream = owner.Stream!;
+            long accountId = owner.AccountId;
             string uuid = Text(Fields(payload, "iio"), 1);
             var preset = CharacterPresets.Find(Me, uuid);
             var state = SessionContext.State;
@@ -446,7 +450,7 @@ namespace Jondo.Unity.Server.Handlers
                 && Outfits.Equip(character, preset.Outfit, gid => CosmeticCollection.Has(accountId, gid)))
             {
                 state.IsWardrobeDraftLoaded = false;
-                await WardrobeHandler.AnnounceAsync(stream, accountId);
+                await WardrobeHandler.AnnounceAsync(owner);
                 await SlotLookHandler.RedrawAsync(stream);
             }
 

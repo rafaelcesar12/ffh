@@ -6,7 +6,8 @@ using Jondo.Unity.Server.Managers;
 namespace Jondo.Unity.Server.Network
 {
     /// <summary>
-    /// The alliance prisms' frames.
+    /// The alliance prisms' world-list, crystal and alliance-fight frames.
+    /// Map appearances use <see cref="MapActorMessages.Prism"/>.
     /// </summary>
     /// <remarks>
     /// Measured: the map actor of two prisms (a jss of «Chats/hablar por canal Comunidad», of
@@ -130,26 +131,6 @@ namespace Jondo.Unity.Server.Network
         public static long CrystalUid(PrismStore.Prism prism) => 2_000_000_000L + prism.Id;
 
         /// <summary>
-        /// The prism as an actor of its map (ljx): the kind 2 of the actor's f2.f1.
-        ///
-        ///   f1 { f1 cell, f2 direction }    f2 { f1 { f2 its state }, f3 its look }    f3 its actor id
-        /// </summary>
-        public static Pb Actor(PrismStore.Prism prism, AllianceStore.Alliance alliance)
-            => Actor(prism, alliance, Look(alliance).Build());
-
-        /// <summary>The same with the look already made.</summary>
-        public static Pb Actor(PrismStore.Prism prism, AllianceStore.Alliance alliance, byte[] look)
-            => Pb.New()
-                .Msg(1, Pb.New().Var(1, prism.CellId).Var(2, prism.Direction))
-                .Msg(2, Pb.New()
-                    .Msg(1, Pb.New().Msg(2, State(prism, alliance)))
-                    .Bytes(3, look))
-                .Var(3, prism.ContextId);
-
-        public static byte[] BuildShown(PrismStore.Prism prism, AllianceStore.Alliance alliance)
-            => Pb.New().Msg(1, Actor(prism, alliance)).Build();
-
-        /// <summary>
         /// A prism in the world's lists (lhm): f1 its map, f2 { f1 x, f2 y }, f3 its subarea, f4 its
         /// state, f5 its alliance's uuid. The 1,000-odd of the ife at world entry have this shape.
         /// </summary>
@@ -162,14 +143,6 @@ namespace Jondo.Unity.Server.Network
                 .Var(3, prism.SubAreaId)
                 .Msg(4, State(prism, alliance, own))
                 .Str(5, alliance.Uuid);
-        }
-
-        /// <summary>Every prism of the world (ife): { f1 each one }, at world entry.</summary>
-        public static byte[] BuildAll(IEnumerable<Pb> prisms)
-        {
-            var ife = Pb.New();
-            foreach (var prism in prisms) ife.Msg(1, prism);
-            return ife.Build();
         }
 
         /// <summary>One placed or changed (ifa): { f2 the prism }, as in «usar emoticonos».</summary>

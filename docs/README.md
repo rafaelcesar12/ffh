@@ -146,6 +146,12 @@ The authenticated `POST /api/personaje` route, its administrator-role check, acc
 kamas fields, session serialization, persistence, immediate client refresh and error responses.
 *Go there* when building an administration tool that must update an online character without a
 restart or reconnect.
+**[`admin-menu.md`](admin-menu.md)** - The client's admin menu and the staff commands behind it.
+What `menuadmin.xml` supports in the 3.6.10 client (types, `%p`, the `#item` and `#npc` selectors, colors),
+how JondoFix installs it, every staff command with its role and syntax, and the tests that keep the menu
+and `CommandHandler` in step.
+*Go there* when adding an entry to the menu, a staff command, or when a click in the menu does nothing.
+
 **`command-localization.md`** — Spanish, English and French command replies.
 How the launch language crosses the single-use session ticket, why it belongs to `SessionState`,
 which replies are translated and how catalogue completeness is guarded at startup.
@@ -177,6 +183,12 @@ this version: server selection, character list, character creation, world entry,
 characteristics, chat, spells and equipment. It also tracks what is done and what is missing.
 *Go there* when something fails before you reach the world, or when you want to know which exact
 message changed since the previous version.
+
+**[`mcp.md`](mcp.md)** — Debugging with an AI agent.
+The MCP server an agent drives the emulator through: the server started from source, a test
+character in the world without the client (`HeadlessClient`), and the real client clicked, read and
+photographed through JondoFix's input port.
+*Go there* to set it up for OpenCode or Claude Code, or before adding a test route.
 
 ---
 

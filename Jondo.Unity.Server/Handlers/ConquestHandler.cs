@@ -5,6 +5,7 @@ using System.Linq;
 using System.Net.Sockets;
 using System.Threading.Tasks;
 using Jondo.Unity.Protocol;
+using Game = Jondo.Unity.Protocol.Game;
 using Jondo.Unity.Server.Managers;
 using Jondo.Unity.Server.Network;
 using Jondo.Unity.World.Fights;
@@ -133,8 +134,7 @@ namespace Jondo.Unity.Server.Handlers
             if (alliance == null) return;
             await PrismHandler.BroadcastChangedAsync(prism);
             if (!FightHandler.IsGroupFighting(prism.ContextId))
-                await SessionRegistry.BroadcastToMapAsync(prism.MapId, ConnectionProtocol.Push(Op.Jsn,
-                    PrismProtocol.BuildShown(prism, alliance)), fightId: 0);
+                await SessionRegistry.BroadcastToMapAsync(prism.MapId, MapActorMessages.PrismShown(prism, alliance), fightId: 0);
         }
 
         // ─── Weakened ───────────────────────────────────────────────────────────
@@ -219,7 +219,7 @@ namespace Jondo.Unity.Server.Handlers
             foreach (long fallen in war.Fallen.Keys.ToList())
             {
                 var session = SessionRegistry.FindByCharacter(fallen);
-                if (session != null) await session.SendAsync(ConnectionProtocol.Push(Op.Kup, KothProtocol.BuildLifeState(KothProtocol.Alive)));
+                if (session != null) await session.SendAsync(new Game.CharacterLifeStatusEvent(Game.CharacterLifeStatus.AliveAndKicking, 0));
             }
             war.Fallen.Clear();
             if (winner != null)
@@ -265,12 +265,12 @@ namespace Jondo.Unity.Server.Handlers
         /// <summary>The score (mep) to the zone's fighters.</summary>
         private static async Task SendScoreAsync(Conquests.War war)
         {
-            byte[] score = ScoreFrame(war);
+            var score = Score(war);
             foreach (var session in FightersIn(war.SubAreaId)) await session.SendAsync(score);
         }
 
-        private static byte[] ScoreFrame(Conquests.War war)
-            => ConnectionProtocol.Push(Op.Mep, KothProtocol.BuildUpdate(war, AllianceStore.ById, AllianceData.DefaultKothRole));
+        private static Game.KothUpdateEvent Score(Conquests.War war)
+            => KothProtocol.Update(war, AllianceStore.ById, AllianceData.DefaultKothRole);
 
         // ─── Who is there ───────────────────────────────────────────────────────
 
@@ -347,8 +347,9 @@ namespace Jondo.Unity.Server.Handlers
         /// into a conquest's zone or out of it -- he hears it (hon) and is drawn again; walking in,
         /// the zone's prism (ifa), which opens the conquest window, and its score (mep).
         /// </summary>
-        public static async Task OnMapEnteredAsync(NetworkStream stream, long characterId, int subAreaId)
+        public static async Task OnMapEnteredAsync(GameSession entrant, int subAreaId)
         {
+            long characterId = entrant.CharacterId;
             if (characterId == 0 || !AllianceStore.TakesPartInAva(characterId)) return;
             if (AllianceStore.AllianceOf(characterId) == null) return;
 
@@ -358,7 +359,7 @@ namespace Jondo.Unity.Server.Handlers
             {
                 if (other.SubAreaId == subAreaId) continue;
                 if (other.Fallen.ContainsKey(characterId))
-                    await SendAsync(stream, ConnectionProtocol.Push(Op.Kup, KothProtocol.BuildLifeState(KothProtocol.Alive)));
+                    await entrant.SendAsync(new Game.CharacterLifeStatusEvent(Game.CharacterLifeStatus.AliveAndKicking, 0));
                 Conquests.Release(other, characterId);
             }
 
@@ -366,26 +367,27 @@ namespace Jondo.Unity.Server.Handlers
             int status = AllianceProtocol.AggressableStatus(characterId);
             if (war != null) await OnWalkedAsync(SessionRegistry.FindByCharacter(characterId));
             if (war != null && status != AllianceProtocol.AvaAggressable && !war.Admitted.ContainsKey(characterId) && !war.Freed.ContainsKey(characterId))
-                await SendAsync(stream, ConnectionProtocol.Push(Op.Lqn, ConnectionProtocol.BuildInfoMessage(InfoMessages.Warning, RoleFull)));
+                await entrant.SendAsync(new Game.TextInformationEvent(Game.TextInformationType.TextInformationError, RoleFull, []));
 
             // A scout on the prism's map gathers nothing there.
             var session = SessionRegistry.FindByCharacter(characterId);
             if (war != null && session != null && RoleIn(war, characterId) == KothRoles.Scout && WhereIs(session) == war.PrismMapId)
-                await SendAsync(stream, ConnectionProtocol.Push(Op.Lqn, ConnectionProtocol.BuildInfoMessage(InfoMessages.Warning, ScoutOnThePrismMap)));
+                await entrant.SendAsync(new Game.TextInformationEvent(Game.TextInformationType.TextInformationError, ScoutOnThePrismMap, []));
 
             int before = _heard.TryGetValue(characterId, out int heard) ? heard : AllianceProtocol.AvaNotAggressable;
             if (status == before) return;
             _heard[characterId] = status;
-            await SendAsync(stream, ConnectionProtocol.Push(Op.Hon,
-                AllianceProtocol.BuildAggressableStatus(status, RoleIn(war, characterId))));
+            await entrant.SendAsync(KothProtocol.SelfStatus(status, RoleIn(war, characterId)));
 
             if (status != AllianceProtocol.AvaAggressable) return;
             var prism = PrismStore.InSubArea(subAreaId);
             var owner = prism == null ? null : AllianceStore.ById(prism.AllianceId);
-            if (owner != null) await SendAsync(stream, PrismHandler.ChangedFor(prism, owner, characterId));
+            if (owner != null)
+                await entrant.SendAsync(new Game.PrismAddOrUpdateEvent(PrismMessages.Live.Localized(prism, owner,
+                    own: AllianceStore.AllianceOf(characterId)?.Id == owner.Id)));
             if (war != null)
             {
-                await SendAsync(stream, ScoreFrame(war));
+                await entrant.SendAsync(Score(war));
                 await SendRolesAsync(war);
             }
         }
@@ -402,16 +404,16 @@ namespace Jondo.Unity.Server.Handlers
             {
                 long me = viewer.State.CharacterId;
                 if (!war.Admitted.TryGetValue(me, out var mine)) continue;
-                var hoh = Pb.New();
+                var roles = new List<Game.MapPlayerAttackableStatus>();
                 foreach (var other in fighters)
                 {
                     long them = other.State.CharacterId;
                     if (them == me || !war.Admitted.TryGetValue(them, out var theirs)) continue;
                     int role = theirs.Alliance == mine.Alliance || mine.Role == KothRoles.Seer ? theirs.Role : NoRole;
-                    int status = war.Fallen.ContainsKey(them) ? AllianceProtocol.AvaNotAggressable : AllianceProtocol.AvaAggressable;
-                    hoh.Msg(1, AllianceProtocol.StatusOf(them, status, role));
+                    var status = war.Fallen.ContainsKey(them) ? Game.AttackableStatus.AvaEnabledNonAttackable : Game.AttackableStatus.AvaEnabledAttackable;
+                    roles.Add(new(role, status, them));
                 }
-                await viewer.SendAsync(ConnectionProtocol.Push(Op.Hoh, hoh.Build()));
+                await viewer.SendAsync(new Game.PlayersMapAttackableStatusUpdateEvent(roles.ToArray()));
             }
         }
 
@@ -424,16 +426,12 @@ namespace Jondo.Unity.Server.Handlers
                 long id = session.State.CharacterId;
                 int status = AllianceProtocol.AggressableStatus(id);
                 _heard[id] = status;
-                await session.SendAsync(ConnectionProtocol.Push(Op.Hon,
-                    AllianceProtocol.BuildAggressableStatus(status, RoleIn(war, id))));
+                await session.SendAsync(KothProtocol.SelfStatus(status, RoleIn(war, id)));
                 if (session.State.IsInFight) continue;
 
                 var character = DatabaseManager.GetCharacterById(id);
                 if (character == null) continue;
-                byte[] jsn = ConnectionProtocol.Push(Op.Jsn, ConnectionProtocol.BuildActorRefreshed(
-                    character, session.State.CellId, session.State.Orientation, session.AccountId));
-                await session.SendAsync(jsn);
-                await SessionRegistry.BroadcastToMapAsync(session.MapId, jsn, session.Id);
+                await MapPresenceService.Live.RefreshAsync(session, character);
             }
             if (war != null) await SendRolesAsync(war);
         }
@@ -565,10 +563,9 @@ namespace Jondo.Unity.Server.Handlers
             var session = SessionRegistry.FindByCharacter(characterId);
             if (session == null) return;
             var (savePoint, _) = FightHandler.SavePointOf(characterId);
-            await session.SendAsync(ConnectionProtocol.Push(Op.Kup, KothProtocol.BuildLifeState(KothProtocol.Tomb, savePoint)));
+            await session.SendAsync(new Game.CharacterLifeStatusEvent(Game.CharacterLifeStatus.Tombstone, savePoint));
             _heard[characterId] = AllianceProtocol.AvaNotAggressable;
-            await session.SendAsync(ConnectionProtocol.Push(Op.Hon,
-                AllianceProtocol.BuildAggressableStatus(AllianceProtocol.AvaNotAggressable)));
+            await session.SendAsync(KothProtocol.SelfStatus(AllianceProtocol.AvaNotAggressable));
             Program.LogDebug($"[Conquest] {session.State.CharacterName} falls in subarea {war.SubAreaId}: a tomb.");
         }
 
@@ -591,7 +588,7 @@ namespace Jondo.Unity.Server.Handlers
             long id = session.State.CharacterId;
             Conquests.Release(war, id);
             war.Freed[id] = true;
-            await session.SendAsync(ConnectionProtocol.Push(Op.Kup, KothProtocol.BuildLifeState(KothProtocol.Alive)));
+            await session.SendAsync(new Game.CharacterLifeStatusEvent(Game.CharacterLifeStatus.AliveAndKicking, 0));
             var (savePoint, _) = FightHandler.SavePointOf(id);
             using (SessionContext.Push(session)) await WorldMoveHandler.TeleportAsync(session.Stream, savePoint);
             Program.LogDebug($"[Conquest] The soul of {session.State.CharacterName} is freed from subarea {war.SubAreaId}.");
@@ -612,15 +609,14 @@ namespace Jondo.Unity.Server.Handlers
                     ConnectionProtocol.BuildInfoMessage(InfoMessages.Warning, InfoMessages.RequirementsNotMet)));
                 return true;
             }
-            if (!await ItemUseHandler.SpendOneAsync(stream, item.Uid)) return true;
+            if (!await ItemUseHandler.SpendOneAsync(SessionContext.Current, item.Uid)) return true;
             foreach (var tomb in risen)
             {
                 long id = tomb.State.CharacterId;
                 war.Fallen.TryRemove(id, out _);
-                await tomb.SendAsync(ConnectionProtocol.Push(Op.Kup, KothProtocol.BuildLifeState(KothProtocol.Alive)));
+                await tomb.SendAsync(new Game.CharacterLifeStatusEvent(Game.CharacterLifeStatus.AliveAndKicking, 0));
                 _heard[id] = AllianceProtocol.AvaAggressable;
-                await tomb.SendAsync(ConnectionProtocol.Push(Op.Hon,
-                    AllianceProtocol.BuildAggressableStatus(AllianceProtocol.AvaAggressable, RoleIn(war, id))));
+                await tomb.SendAsync(KothProtocol.SelfStatus(AllianceProtocol.AvaAggressable, RoleIn(war, id)));
             }
             Program.LogDebug($"[Conquest] Resurrector {me.State.CharacterName} raises {risen.Count} tomb(s).");
             await SendRolesAsync(war);
@@ -642,7 +638,7 @@ namespace Jondo.Unity.Server.Handlers
                     ConnectionProtocol.BuildInfoMessage(InfoMessages.Warning, InfoMessages.RequirementsNotMet)));
                 return true;
             }
-            if (!await ItemUseHandler.SpendOneAsync(stream, item.Uid)) return true;
+            if (!await ItemUseHandler.SpendOneAsync(SessionContext.Current, item.Uid)) return true;
             foreach (var tomb in freed) await FreeAsync(war, tomb);
             Program.LogDebug($"[Conquest] Gravedigger {me.State.CharacterName} frees {freed.Count} soul(s).");
             await SendRolesAsync(war);
@@ -706,7 +702,7 @@ namespace Jondo.Unity.Server.Handlers
                     ConnectionProtocol.BuildInfoMessage(InfoMessages.Warning, InfoMessages.RequirementsNotMet)));
                 return true;
             }
-            if (!await ItemUseHandler.SpendOneAsync(stream, item.Uid)) return true;
+            if (!await ItemUseHandler.SpendOneAsync(SessionContext.Current, item.Uid)) return true;
             war.Sentinels[id] = me.State.MapId;
             Program.LogDebug($"[Conquest] Sentinel {me.State.CharacterName} stands guard on map {me.State.MapId}.");
             return true;
@@ -768,7 +764,7 @@ namespace Jondo.Unity.Server.Handlers
                 return true;
             }
             if (!war.ScoutCarried.TryGetValue(id, out int carried) || carried <= 0) return true;
-            if (!await ItemUseHandler.SpendOneAsync(stream, item.Uid)) return true;
+            if (!await ItemUseHandler.SpendOneAsync(SessionContext.Current, item.Uid)) return true;
 
             long handed = Conquests.HandIn(war, id, war.Admitted[id].Alliance);
             Program.LogDebug($"[Conquest] Scout {me.State.CharacterName} hands in {handed} point(s) on the prism's map.");

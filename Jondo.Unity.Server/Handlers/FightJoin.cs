@@ -9,6 +9,7 @@ using Jondo.Unity.Server.Managers;
 using Jondo.Unity.Server.Network;
 using Jondo.Unity.World.Fights;
 using static Jondo.Protocol.NetworkMessage;
+using Game = Jondo.Unity.Protocol.Game;
 
 namespace Jondo.Unity.Server.Handlers
 {
@@ -147,12 +148,11 @@ namespace Jondo.Unity.Server.Handlers
         /// jqz, and the ten that carry a fight in their f12 all are; the other seven of the follow
         /// capture have none.
         /// </remarks>
-        public static async Task SendFightCountAsync(NetworkStream stream, long mapId)
+        public static async Task SendFightCountAsync(GameSession session, long mapId)
         {
             int count = FightsOnMap(mapId).Count;
             if (count == 0) return;
-            await WriteFrameAsync(stream, ConnectionProtocol.Push(Op.Jqz,
-                FightJoinProtocol.BuildFightCount(count)));
+            await session.SendAsync(new Game.MapFightCountEvent(count));
         }
 
         // ─── The teams, for the map ─────────────────────────────────────────────
@@ -166,7 +166,9 @@ namespace Jondo.Unity.Server.Handlers
             var side = fight.Bando(team);
             if (team == FightInstance.Rojos && fight.TaxCollectorUuid != null)
                 return TaxCollectorSideOnMap(fight, side, withMembers);
-            bool monsters = side.Exists(f => f.IsMonster && !f.EsInvocado)
+            // A companion is its master's (FightCompanions.cs): it does not make his side the
+            // monsters', and the map's list leaves it out -- who it is there is not measured.
+            bool monsters = side.Exists(f => f.IsMonster && !f.EsInvocado && !f.IsCompanion)
                             || (team == FightInstance.Rojos && fight.Reglas.EnfrenteHayMonstruos);
 
             long leader = monsters
@@ -180,7 +182,7 @@ namespace Jondo.Unity.Server.Handlers
                 members = new List<Pb>();
                 foreach (var f in side.ToList())
                 {
-                    if (f.EsInvocado || !f.IsAlive) continue;
+                    if (f.EsInvocado || f.IsCompanion || !f.IsAlive) continue;
                     members.Add(f.IsMonster
                         ? FightJoinProtocol.MonsterOnTeam(f.Id, f.MonsterId, f.GradeIndex + 1)
                         : FightJoinProtocol.PersonOnTeam(f.Id, f.Level, f.Name));
@@ -218,33 +220,80 @@ namespace Jondo.Unity.Server.Handlers
         /// that grows one by one behind the swords (follow capture 141, dungeon 91-94). A tax
         /// collector's side is the tax collector, whole.
         /// </summary>
-        private static Pb MonstersSoFar(FightInstance fight, IReadOnlyList<Fighter> monsters, int howMany)
+        private static Game.FightTeamInformation MonstersSoFar(FightInstance fight, IReadOnlyList<Fighter> monsters, int howMany)
             => fight.TaxCollectorUuid != null
-                ? TeamOnMap(fight, FightInstance.Rojos, withMembers: true)
-                : FightJoinProtocol.Team(FightInstance.Rojos, fight.DefenderLeaderId, true,
-                    monsters.Take(howMany).Select(m =>
-                        FightJoinProtocol.MonsterOnTeam(m.Id, m.MonsterId, m.GradeIndex + 1)));
+                ? TeamSnapshotOf(fight, FightInstance.Rojos, withMembers: true)
+                : TeamSnapshotOf(fight, FightInstance.Rojos, withMembers: true, monsters.Take(howMany));
 
-        /// <summary>The fight as a jss or an hpy carries it, both sides with their members.</summary>
-        internal static Pb MapEntryOf(FightInstance fight)
+        /// <summary>The same placement state, constructed directly for typed map snapshots.</summary>
+        internal static Game.FightCommonInformation MapSnapshotOf(FightInstance fight) => MapSnapshotOf(fight, true);
+
+        private static Game.FightCommonInformation MapSnapshotOf(FightInstance fight, bool withDefenders)
         {
             _onTheMap.TryGetValue(fight.FightId, out var where);
-            return FightJoinProtocol.FightOnMap(fight.FightId, fight.Reglas.TipoDelKam,
-                where?.AttackersFlag ?? 0, where?.DefendersFlag ?? 0,
-                TeamOnMap(fight, FightInstance.Azules, withMembers: true),
-                TeamOnMap(fight, FightInstance.Rojos, withMembers: true),
-                fight.OptionOn(FightInstance.Azules, FightInstance.OptionPartyOnly),
-                fight.OptionOn(FightInstance.Rojos, FightInstance.OptionPartyOnly));
+            var type = fight.Reglas.TipoDelKam switch
+            {
+                0 => Game.FightType.Challenge, 1 => Game.FightType.Aggression, 2 => Game.FightType.PvMa,
+                3 => Game.FightType.MxvM, 4 => Game.FightType.PvM, 5 => Game.FightType.PvT,
+                6 => Game.FightType.PvMu, 7 => Game.FightType.PvpArena, 8 => Game.FightType.Koh,
+                9 => Game.FightType.PvPr, 10 => Game.FightType.Breach,
+                _ => throw new InvalidOperationException($"Unsupported map fight type {fight.Reglas.TipoDelKam}."),
+            };
+            return new(checked((int)fight.FightId), type,
+                [TeamSnapshotOf(fight, FightInstance.Azules, true), TeamSnapshotOf(fight, FightInstance.Rojos, withDefenders)],
+                [where?.AttackersFlag ?? 0, where?.DefendersFlag ?? 0],
+                [new(false, fight.OptionOn(FightInstance.Azules, FightInstance.OptionPartyOnly), false, false),
+                 new(false, fight.OptionOn(FightInstance.Rojos, FightInstance.OptionPartyOnly), false, false)]);
         }
+
+        internal static Game.FightTeamInformation TeamSnapshotOf(FightInstance fight, int team, bool withMembers,
+            IEnumerable<Fighter>? selectedMembers = null)
+        {
+            var side = fight.Bando(team).ToArray();
+            bool collector = team == FightInstance.Rojos && fight.TaxCollectorUuid != null;
+            bool monsters = side.Any(f => f.IsMonster && !f.EsInvocado)
+                || team == FightInstance.Rojos && fight.Reglas.EnfrenteHayMonstruos;
+            long leader = collector || monsters ? fight.DefenderLeaderId
+                : side.FirstOrDefault(f => !f.IsMonster && !f.EsInvocado)?.Id
+                    ?? (team == FightInstance.Rojos ? fight.DefenderLeaderId : 0);
+            var members = (withMembers ? selectedMembers ?? side : []).Where(f => !f.EsInvocado && f.IsAlive)
+                .Select(f => new Game.FightTeamMemberInformation(f.Id,
+                collector && f.TaxCollectorFirstName > 0
+                    ? new Game.FightTeamMemberInformationCaseTaxCollectorMember(new(f.TaxCollectorFirstName, f.TaxCollectorLastName))
+                    : !collector && f.IsMonster
+                        ? new Game.FightTeamMemberInformationCaseMonsterMember(new(f.MonsterId, f.GradeIndex + 1))
+                        : new Game.FightTeamMemberInformationCaseCharacter(new(f.Level, f.Name ?? "")))).ToArray();
+            return new(collector ? Game.TeamType.TaxCollector : monsters ? Game.TeamType.Monster : Game.TeamType.Player,
+                leader, Game.Alignment.Without, TeamIdentity(team),
+                0, new Game.FightTeamInformationCaseMembers(new(members)));
+        }
+
+        private static Game.Team TeamIdentity(int team) => team switch
+        {
+            FightInstance.Azules => Game.Team.Challenger,
+            FightInstance.Rojos => Game.Team.Defender,
+            _ => throw new ArgumentOutOfRangeException(nameof(team)),
+        };
+
+        private static Game.FightTeamUpdateEvent TeamUpdate(FightInstance fight, int team, bool withMembers)
+            => new(TeamSnapshotOf(fight, team, withMembers), checked((int)fight.FightId));
+
+        private static Game.FightOptionUpdateEvent OptionUpdate(FightInstance fight, int team, int option, bool on)
+            => new(TeamIdentity(team), option switch
+            {
+                0 => Game.FightOption.Unknown0, 1 => Game.FightOption.Unknown1,
+                2 => Game.FightOption.Unknown2, 3 => Game.FightOption.Unknown3,
+                _ => throw new ArgumentOutOfRangeException(nameof(option)),
+            }, on, checked((int)fight.FightId));
 
         /// <summary>
         /// A frame for the people standing on the fight's map, and only them: whoever is in a
         /// fight hears his fight and not the street (SessionRegistry.Hears with fight 0).
         /// </summary>
-        private static Task<int> ToTheMapAsync(FightInstance fight, byte[] frame)
+        private static Task<int> ToTheMapAsync(FightInstance fight, Game.GameEvent message)
             => fight.Reglas.PagaElKoliseo
                 ? Task.FromResult(0)
-                : SessionRegistry.BroadcastToMapAsync(fight.RoleplayMapId, frame, fightId: 0);
+                : SessionRegistry.BroadcastToMapAsync(fight.RoleplayMapId, message, fightId: 0);
 
         /// <summary>
         /// Where the defenders' flag goes: on the group, unless the attacker stands on it -- then
@@ -292,12 +341,9 @@ namespace Jondo.Unity.Server.Handlers
             // Not in the koliseo: its capture has the board's kae and no other (frame 251).
             if (!fight.Reglas.PagaElKoliseo)
             {
-                byte[] ours = ConnectionProtocol.Push(Op.Kae, FightJoinProtocol.BuildTeamUpdate(
-                    TeamOnMap(fight, FightInstance.Azules, withMembers: true), fight.FightId));
-                byte[] theirs = ConnectionProtocol.Push(Op.Kae, FightJoinProtocol.BuildTeamUpdate(
-                    TeamOnMap(fight, FightInstance.Rojos,
-                              withMembers: !fight.Reglas.EnfrenteHayMonstruos || fight.TaxCollectorUuid != null),
-                    fight.FightId));
+                var ours = TeamUpdate(fight, FightInstance.Azules, withMembers: true);
+                var theirs = TeamUpdate(fight, FightInstance.Rojos,
+                    withMembers: !fight.Reglas.EnfrenteHayMonstruos || fight.TaxCollectorUuid != null);
                 foreach (var session in Publico(fight))
                 {
                     await session.SendAsync(ours);
@@ -365,7 +411,7 @@ namespace Jondo.Unity.Server.Handlers
 
             bool on = !fight.OptionOn(side, option);
             fight.SetOption(side, option, on);
-            byte[] kau = ConnectionProtocol.Push(Op.Kau, Network.FightProtocol.BuildFightOption(side, option, on, fight.FightId));
+            var kau = OptionUpdate(fight, side, option, on);
             await ATodosAsync(fight, kau);
             if (fight.State == FightState.Placement) await ToTheMapAsync(fight, kau);
             if (option == FightInstance.OptionClosed && on)
@@ -402,48 +448,33 @@ namespace Jondo.Unity.Server.Handlers
 
             if (monsters)
             {
-                await ToTheMapAsync(fight, ConnectionProtocol.Push(Op.Kmu,
-                    FightJoinProtocol.BuildActorHidden(fight.DefenderLeaderId)));
+                await ToTheMapAsync(fight, new Game.ContextRemoveElementEvent(fight.DefenderLeaderId));
             }
             foreach (var person in fight.Todos.Where(f => !f.IsMonster && !f.EsInvocado).ToList())
             {
-                await ToTheMapAsync(fight, ConnectionProtocol.Push(Op.Kmu,
-                    FightJoinProtocol.BuildActorHidden(person.Id)));
+                await ToTheMapAsync(fight, new Game.ContextRemoveElementEvent(person.Id));
             }
 
             foreach (int side in new[] { FightInstance.Azules, FightInstance.Rojos })
             {
                 if (!RestrictToPartyOnOpening(fight, side)) continue;
-                await ToTheMapAsync(fight, ConnectionProtocol.Push(Op.Kau,
-                    Network.FightProtocol.BuildFightOption(side, FightInstance.OptionPartyOnly, true, fight.FightId)));
+                await ToTheMapAsync(fight, OptionUpdate(fight, side, FightInstance.OptionPartyOnly, true));
             }
 
             // The hpy has the monsters' side empty, as all three captures do: its members come in
             // the kae behind it, one at a time.
-            _onTheMap.TryGetValue(fight.FightId, out var where);
-            var shown = FightJoinProtocol.FightOnMap(fight.FightId, fight.Reglas.TipoDelKam,
-                where?.AttackersFlag ?? 0, where?.DefendersFlag ?? 0,
-                TeamOnMap(fight, FightInstance.Azules, withMembers: true),
-                TeamOnMap(fight, FightInstance.Rojos, withMembers: !monsters),
-                fight.OptionOn(FightInstance.Azules, FightInstance.OptionPartyOnly),
-                fight.OptionOn(FightInstance.Rojos, FightInstance.OptionPartyOnly));
-            await ToTheMapAsync(fight, ConnectionProtocol.Push(Op.Hpy,
-                FightJoinProtocol.BuildFightShown(shown)));
+            await ToTheMapAsync(fight, new Game.ShowChallengeEvent(MapSnapshotOf(fight, withDefenders: !monsters)));
 
-            await ToTheMapAsync(fight, ConnectionProtocol.Push(Op.Jqz,
-                FightJoinProtocol.BuildFightCount(FightsOnMap(fight.RoleplayMapId).Count)));
+            await ToTheMapAsync(fight, new Game.MapFightCountEvent(FightsOnMap(fight.RoleplayMapId).Count));
 
-            await ToTheMapAsync(fight, ConnectionProtocol.Push(Op.Kae, FightJoinProtocol.BuildTeamUpdate(
-                TeamOnMap(fight, FightInstance.Azules, withMembers: true), fight.FightId)));
-            await ToTheMapAsync(fight, ConnectionProtocol.Push(Op.Kae, FightJoinProtocol.BuildTeamUpdate(
-                TeamOnMap(fight, FightInstance.Rojos, withMembers: !monsters), fight.FightId)));
+            await ToTheMapAsync(fight, TeamUpdate(fight, FightInstance.Azules, withMembers: true));
+            await ToTheMapAsync(fight, TeamUpdate(fight, FightInstance.Rojos, withMembers: !monsters));
 
             if (!monsters) return;
             var theMonsters = fight.Rojo.Where(f => f.IsMonster && !f.EsInvocado).ToList();
             for (int k = 1; k <= theMonsters.Count; k++)
             {
-                await ToTheMapAsync(fight, ConnectionProtocol.Push(Op.Kae,
-                    FightJoinProtocol.BuildTeamUpdate(MonstersSoFar(fight, theMonsters, k), fight.FightId)));
+                await ToTheMapAsync(fight, new Game.FightTeamUpdateEvent(MonstersSoFar(fight, theMonsters, k), checked((int)fight.FightId)));
             }
         }
 
@@ -547,6 +578,7 @@ namespace Jondo.Unity.Server.Handlers
                                                         bool followingLeader)
         {
             Fighter fighter;
+            Fighter? companion = null;
             using (SessionContext.Push(who))
             {
                 long me = GameState.CharacterId;
@@ -562,6 +594,10 @@ namespace Jondo.Unity.Server.Handlers
                 bool joined;
                 lock (fight) joined = fight.JoinTeam(fighter, team, CapOf(fight));
                 if (!joined) return false;
+
+                // And the companion he wears, against monsters, beside him (FightCompanions.cs).
+                if (fight.Reglas.EnfrenteHayMonstruos)
+                    lock (fight) companion = AddCompanion(fight, fighter, fight.SiguienteIdDeInvocado());
 
                 var suyo = SessionContext.State;
                 suyo.MapId = fight.MapId;
@@ -585,8 +621,7 @@ namespace Jondo.Unity.Server.Handlers
             await ATodosAsync(fight, ConnectionProtocol.Push(Op.Kmk,
                 Network.FightProtocol.BuildFightersPlaced(PlacedFacing(fight, fighter))));
 
-            await ATodosAsync(fight, ConnectionProtocol.Push(Op.Kae, FightJoinProtocol.BuildTeamUpdate(
-                TeamOnMap(fight, team, withMembers: true), fight.FightId)));
+            await ATodosAsync(fight, TeamUpdate(fight, team, withMembers: true));
 
             if (fight.Reglas.HayRetos)
             {
@@ -596,6 +631,14 @@ namespace Jondo.Unity.Server.Handlers
             }
 
             await ATodosAsync(fight, ConnectionProtocol.Push(Op.Jxg, BuildPlayerAppearance(fight, fighter)));
+
+            // His companion after him, placed and drawn as he is.
+            if (companion != null)
+            {
+                await ATodosAsync(fight, ConnectionProtocol.Push(Op.Kmk,
+                    Network.FightProtocol.BuildFighterPlaced(companion.CellId, FacingOf(fight, companion), companion.Id)));
+                await ATodosAsync(fight, ConnectionProtocol.Push(Op.Jxg, CreatureFighter(fight, companion)));
+            }
 
             // The carousel behind him -- unless a dungeon's monsters are rebuilt, which send one
             // behind each new monster: the dungeon capture goes from his jxg (139) straight to
@@ -607,10 +650,8 @@ namespace Jondo.Unity.Server.Handlers
                     TeamsOf(fight)));
             }
 
-            await ToTheMapAsync(fight, ConnectionProtocol.Push(Op.Kmu,
-                FightJoinProtocol.BuildActorHidden(fighter.Id)));
-            await ToTheMapAsync(fight, ConnectionProtocol.Push(Op.Kae, FightJoinProtocol.BuildTeamUpdate(
-                TeamOnMap(fight, team, withMembers: true), fight.FightId)));
+            await ToTheMapAsync(fight, new Game.ContextRemoveElementEvent(fighter.Id));
+            await ToTheMapAsync(fight, TeamUpdate(fight, team, withMembers: true));
             await RegrowthOnTheMapAsync(fight, regrown);
 
             Program.LogDebug($"[Fight] {fighter.Name} joins fight #{fight.FightId}, side " +
@@ -673,9 +714,8 @@ namespace Jondo.Unity.Server.Handlers
             foreach (var gone in removed)
             {
                 await ATodosAsync(fight, ConnectionProtocol.Push(Op.Kar, FightJoinProtocol.BuildFighterRemoved(gone.Id)));
-                await ATodosAsync(fight, ConnectionProtocol.Push(Op.Kmu, FightJoinProtocol.BuildActorHidden(gone.Id)));
-                await ATodosAsync(fight, ConnectionProtocol.Push(Op.Jzw,
-                    FightJoinProtocol.BuildTeamMemberRemoved(fight.FightId, FightInstance.Rojos, gone.Id)));
+                await ATodosAsync(fight, new Game.ContextRemoveElementEvent(gone.Id));
+                await ATodosAsync(fight, new Game.FightTeamRemoveMemberEvent(checked((int)fight.FightId), Game.Team.Defender, gone.Id));
             }
 
             foreach (var monster in added)
@@ -704,13 +744,11 @@ namespace Jondo.Unity.Server.Handlers
         {
             foreach (var gone in regrown.Removed)
             {
-                await ToTheMapAsync(fight, ConnectionProtocol.Push(Op.Jzw,
-                    FightJoinProtocol.BuildTeamMemberRemoved(fight.FightId, FightInstance.Rojos, gone.Id)));
+                await ToTheMapAsync(fight, new Game.FightTeamRemoveMemberEvent(checked((int)fight.FightId), Game.Team.Defender, gone.Id));
             }
             for (int k = 1; k <= regrown.Added.Count; k++)
             {
-                await ToTheMapAsync(fight, ConnectionProtocol.Push(Op.Kae,
-                    FightJoinProtocol.BuildTeamUpdate(MonstersSoFar(fight, regrown.Added, k), fight.FightId)));
+                await ToTheMapAsync(fight, new Game.FightTeamUpdateEvent(MonstersSoFar(fight, regrown.Added, k), checked((int)fight.FightId)));
             }
         }
 
@@ -724,17 +762,17 @@ namespace Jondo.Unity.Server.Handlers
         /// leader who opened fight 471 and none for the two who were put in behind him 0.1 s
         /// later (frames 95, 96 and 108).
         /// </summary>
-        private static async Task PartyAfterEntryAsync(FightInstance fight, Fighter person, bool tellTheParty)
+        internal static async Task PartyAfterEntryAsync(FightInstance fight, Fighter person, bool tellTheParty)
         {
             if (fight.Reglas.PagaElKoliseo) return;
             var party = Parties.Of(person.Id);
             if (party == null || !Parties.IsInParty(person.Id)) return;
 
             var followers = FollowersInto(fight, person);
-            var told = ConnectionProtocol.Push(Op.Ilh, PartyMemberInFight(fight, person, party.Id));
+            var told = tellTheParty ? PartyMemberInFight(fight, person) : null;
             foreach (long member in Parties.MembersOf(party))
             {
-                if (!tellTheParty) break;
+                if (told == null) break;
                 if (member == person.Id || followers.Contains(member)) continue;
                 var session = SessionRegistry.FindByCharacter(member);
                 if (session == null || !session.IsInWorld) continue;
@@ -798,20 +836,18 @@ namespace Jondo.Unity.Server.Handlers
         }
 
         /// <summary>The ilh of a person, for his party.</summary>
-        private static byte[] PartyMemberInFight(FightInstance fight, Fighter person, long partyId)
+        private static Game.PartyMemberInFightEvent PartyMemberInFight(FightInstance fight, Fighter person)
         {
             var map = MapManager.GetMapInfo(fight.RoleplayMapId);
-            var session = SessionRegistry.FindByCharacter(person.Id);
             int left = fight.Reglas.KaaConCuentaAtras
                 ? fight.PlacementDecisecondsLeft(fight.Reglas.RelojDeColocacion, DateTime.UtcNow)
                 : 0;
 
-            return FightJoinProtocol.BuildPartyMemberInFight(
-                person.Id, left, session?.AccountId ?? 0, person.Name, fight.FightId, partyId,
+            return new(person.Id, left, person.Name ?? "", checked((int)fight.FightId),
                 fight.Reglas.EnfrenteHayMonstruos
-                    ? FightJoinProtocol.PartyFightMonsters
-                    : FightJoinProtocol.PartyFightChallenge,
-                fight.RoleplayMapId, map?.PosX ?? 0, map?.PosY ?? 0, map?.SubAreaId ?? 0);
+                    ? Game.PartyMemberInFightCause.MonsterAttack
+                    : Game.PartyMemberInFightCause.MemberChallenge,
+                new(fight.RoleplayMapId, map?.PosX ?? 0, map?.SubAreaId ?? 0, map?.PosY ?? 0));
         }
 
         /// <summary>Whether this character has the automatic entry on. Off until the client says.</summary>
@@ -944,8 +980,7 @@ namespace Jondo.Unity.Server.Handlers
                 fight.CancelPlacementTimer();
                 fight.CancelTurnTimer();
                 _activeFights.TryRemove(fight.FightId, out _);
-                await ToTheMapAsync(fight, ConnectionProtocol.Push(Op.Hpr,
-                    FightJoinProtocol.BuildFightHidden(fight.FightId)));
+                await ToTheMapAsync(fight, new Game.RemoveChallengeEvent(checked((int)fight.FightId)));
                 await FightOffTheMapAsync(fight);
                 // A tax collector or a prism left with nobody attacking it stands again.
                 await FightOverForTheWorldAsync(fight, attackersWon: false);
@@ -959,17 +994,26 @@ namespace Jondo.Unity.Server.Handlers
             // kmu and jzw. The kar alone only cancels his pending swaps in the placement frame
             // (fjw.bfvx); it is the jzw that takes him off (fjw.bfwh), and without it he stayed
             // standing there for the whole fight, struck by spells that did nothing.
-            await ATodosAsync(fight, ConnectionProtocol.Push(Op.Kar, FightJoinProtocol.BuildFighterRemoved(me)));
-            await ATodosAsync(fight, ConnectionProtocol.Push(Op.Kmu, FightJoinProtocol.BuildActorHidden(me)));
-            await ATodosAsync(fight, ConnectionProtocol.Push(Op.Jzw,
-                FightJoinProtocol.BuildTeamMemberRemoved(fight.FightId, team, me)));
+            // And his companion, taken off with him (FightInstance.LeavePlacement).
+            List<long> gone;
+            lock (fight)
+            {
+                gone = new List<long> { me };
+                gone.AddRange(fight.CompanionsGone);
+                fight.CompanionsGone.Clear();
+            }
+            foreach (long fighter in gone)
+            {
+                await ATodosAsync(fight, ConnectionProtocol.Push(Op.Kar, FightJoinProtocol.BuildFighterRemoved(fighter)));
+                await ATodosAsync(fight, new Game.ContextRemoveElementEvent(fighter));
+                await ATodosAsync(fight, new Game.FightTeamRemoveMemberEvent(checked((int)fight.FightId), TeamIdentity(team), fighter));
+            }
             await ATodosAsync(fight, ConnectionProtocol.Push(Op.Jzu,
                 TeamsOf(fight)));
 
             if (team >= 0 && fight.PeopleIn(team) > 0)
             {
-                byte[] side = ConnectionProtocol.Push(Op.Kae, FightJoinProtocol.BuildTeamUpdate(
-                    TeamOnMap(fight, team, withMembers: true), fight.FightId));
+                var side = TeamUpdate(fight, team, withMembers: true);
                 await ATodosAsync(fight, side);
                 await ToTheMapAsync(fight, side);
             }
@@ -988,8 +1032,7 @@ namespace Jondo.Unity.Server.Handlers
                 _joinAfterWalk.TryRemove(pending.Key, out _);
             }
 
-            await ToTheMapAsync(fight, ConnectionProtocol.Push(Op.Hpr,
-                FightJoinProtocol.BuildFightHidden(fight.FightId)));
+            await ToTheMapAsync(fight, new Game.RemoveChallengeEvent(checked((int)fight.FightId)));
         }
 
         /// <summary>
@@ -1043,8 +1086,7 @@ namespace Jondo.Unity.Server.Handlers
             await SpectatorsHomeAsync(fight);
             if (fight.Reglas.PagaElKoliseo) return;
 
-            await SessionRegistry.BroadcastToMapAsync(fight.RoleplayMapId, ConnectionProtocol.Push(Op.Jqz,
-                FightJoinProtocol.BuildFightCount(FightsOnMap(fight.RoleplayMapId).Count)), fightId: 0);
+            await ToTheMapAsync(fight, new Game.MapFightCountEvent(FightsOnMap(fight.RoleplayMapId).Count));
 
             var groupNow = where?.Replacement
                            ?? (where?.Group != null && MobSpawnManager.GetMobsForMap(fight.RoleplayMapId)
@@ -1054,8 +1096,7 @@ namespace Jondo.Unity.Server.Handlers
             if (groupNow != null && groupNow.Members.Count > 0)
             {
                 await SessionRegistry.BroadcastToMapAsync(fight.RoleplayMapId,
-                    ConnectionProtocol.Push(Op.Jsn, Pb.New()
-                        .Msg(1, ConnectionProtocol.MonsterGroupActor(groupNow)).Build()),
+                    new Game.GameRolePlayShowActorsEvent([MapActorMessages.MonsterGroup(groupNow)]),
                     fightId: 0);
             }
         }
@@ -1070,10 +1111,8 @@ namespace Jondo.Unity.Server.Handlers
             var ficha = DatabaseManager.GetCharacterById(who.CharacterId);
             if (ficha == null) return;
 
-            await SessionRegistry.BroadcastToMapAsync(who.MapId,
-                ConnectionProtocol.Push(Op.Jsn, ConnectionProtocol.BuildActorRefreshed(
-                    ficha, who.State.CellId, who.State.Orientation, who.AccountId)),
-                who.Id, fightId: 0);
+            await who.Map.SendAsync(MapActorMessages.Refreshed(ficha, who.State.CellId, who.State.Orientation, who.AccountId),
+                exceptSessionId: who.Id, fightId: 0);
         }
     }
 }

@@ -88,6 +88,105 @@ public sealed class GameNodeDispatchTests
     }
 
     [Fact]
+    public async Task Average_prices_request_reaches_the_live_sender_and_encodes_its_event_through_the_session_codec()
+    {
+        var codec = new CountingCodec();
+        await using var pipe = await Pipe.OpenAsync(codec);
+        pipe.Start(Wire.Encode(new(new ObjectAveragePricesRequest(), -73)));
+
+        var reply = Wire.Decode(await pipe.Next());
+        Assert.IsType<ObjectAveragePricesEvent>(reply.Content);
+        Assert.Null(reply.Uid);
+        await pipe.Finish();
+
+        Assert.Equal(1, codec.Decodes);
+        Assert.Equal(1, codec.Encodes);
+        Assert.False(pipe.ClientStream.DataAvailable);
+    }
+
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(2, -71)]
+    public async Task Community_selection_sends_a_uidless_event_on_the_live_connection(int community, int uid)
+    {
+        var codec = new CountingCodec();
+        await using var pipe = await Pipe.OpenAsync(codec);
+        pipe.Start(Wire.Encode(new(new ChatCommunitySelectionRequest(community), uid)));
+
+        var reply = Wire.Decode(await pipe.Next());
+        Assert.IsType<CommunityChannelEvent>(reply.Content);
+        Assert.Null(reply.Uid);
+        await pipe.Finish();
+
+        Assert.Equal(1, codec.Decodes);
+        Assert.Equal(1, codec.Encodes);
+        Assert.False(pipe.ClientStream.DataAvailable);
+    }
+
+    [Fact]
+    public async Task Character_management_and_relogin_dispatch_typed_uidless_events()
+    {
+        var codec = new CountingCodec();
+        await using var pipe = await Pipe.OpenAsync(codec);
+        pipe.Start(Wire.Encode(new(new CharacterNameSuggestionRequest(), -7)));
+        Assert.False(string.IsNullOrWhiteSpace((await ReadEvent<CharacterNameSuggestionEvent>()).Suggestion));
+
+        // Creation without the nested remodel block must still reach the handler.
+        await pipe.Send(Wire.Encode(new(new CharacterCreationRequest(new("", 0, [-1], null, 0, Gender.Male, 1)), 0)));
+        Assert.Equal(CharacterCreationResult.CreateErrorNoReason, (await ReadEvent<CharacterCreationResultEvent>()).Result);
+
+        await pipe.Send(Wire.Encode(new(new PrepareCharacterDeletionRequest(0), -8)));
+        await pipe.Send(Wire.Encode(new(new CharacterDeletionRequest(0, ""), -9)));
+        await pipe.Send(Wire.Encode(new(new CharacterDeletionCompletedRequest(), int.MinValue)));
+        Assert.Equal(CharacterCreationResult.CreateOk, (await ReadEvent<CanCharacterBeCreatedResultEvent>()).Result);
+
+        await pipe.Send(Wire.Encode(new(new ReloginRequest(), -10)));
+        var relogin = await ReadEvent<ReloginTokenEvent>();
+        Assert.True(relogin.ValidToken);
+        Assert.Equal(pipe.Session.AccountId, ClientLaunchRegistry.ResolveToken(relogin.Token));
+        await pipe.Finish();
+        Assert.Equal(6, codec.Decodes);
+        Assert.Equal(4, codec.Encodes);
+        Assert.False(pipe.ClientStream.DataAvailable);
+
+        async Task<T> ReadEvent<T>() where T : GameEvent
+        {
+            var frame = Wire.Decode(await pipe.Next());
+            Assert.Null(frame.Uid);
+            return Assert.IsType<T>(frame.Content);
+        }
+    }
+
+    [Fact]
+    public async Task Retired_map_and_transition_aliases_only_reach_diagnostics_and_leave_the_connection_usable()
+    {
+        string[] retired = ["kkr", "jqf", "igx", "joi", "jos", "jpp", "loy", "lpj", "hmv", "ibt"];
+        var before = retired.ToDictionary(alias => alias, Recorded);
+        var codec = new CountingCodec();
+        await using var pipe = await Pipe.OpenAsync(codec);
+        pipe.Session.State.MapId = 91_000_910;
+        pipe.Session.State.CellId = 123;
+        pipe.Session.State.Orientation = 5;
+        byte[] payload = Pb.New().Var(1, 91_000_911).Packed(2, new long[] { 245, 246 }).Build();
+        pipe.Start(Request(retired[0], payload));
+        foreach (string alias in retired.Skip(1)) await pipe.Send(Request(alias, payload));
+        // A current request is a barrier after the retired packets. Any old
+        // compatibility response would arrive before this typed reply.
+        await pipe.Send(Wire.Encode(new(new PingRequest(false), int.MinValue)));
+        Assert.IsType<PongEvent>(Wire.Decode(await pipe.Next()).Content);
+        await pipe.Finish();
+        Assert.False(pipe.ClientStream.DataAvailable);
+        Assert.Equal(91_000_910, pipe.Session.MapId);
+        Assert.Equal(123, pipe.Session.State.CellId);
+        Assert.Equal(5, pipe.Session.State.Orientation);
+        Assert.False(pipe.Session.State.IsInFight);
+        Assert.False(pipe.Session.IsInWorld);
+        Assert.Equal(retired.Length + 1, codec.Decodes);
+        Assert.Equal(1, codec.Encodes);
+        foreach (string alias in retired) Assert.Equal(before[alias] + 1, Recorded(alias));
+    }
+
+    [Fact]
     public async Task Only_requests_without_typed_handlers_reach_raw_diagnostics_on_each_packet()
     {
         var codec = new CountingCodec();
@@ -161,7 +260,7 @@ public sealed class GameNodeDispatchTests
         private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
         private Task loop = Task.CompletedTask;
         internal NetworkStream ClientStream { get; } = client.GetStream();
-        private GameSession Session { get; } = new(server.GetStream(), codec);
+        internal GameSession Session { get; } = new(server.GetStream(), codec);
 
         internal static async Task<Pipe> OpenAsync(IGameCodec codec)
         {

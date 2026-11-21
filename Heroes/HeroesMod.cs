@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
@@ -222,6 +222,23 @@ namespace Heroes
             ["error.off"] = L("El servidor no tiene activado el modo Héroe.", "The server has the hero mode off.", "Le serveur n'a pas activé le mode Héros."),
             ["error.none"] = L("No se puede desconectar ahora.", "It cannot be disconnected now.", "Impossible de le déconnecter maintenant."),
             ["error"] = L("No se ha podido.", "It could not be done.", "Cela n'a pas pu se faire."),
+            ["hint.quests"] = L("Compartir misiones", "Share quest progress", "Partager la progression des quêtes"),
+            ["quests.behind"] = L("No ha seguido:", "Did not follow:", "N'a pas suivi :"),
+            ["quests.line"] = L("• {0}: {1}", "• {0}: {1}", "• {0} : {1}"),
+            ["quests.why.elsewhere"] = L("no estaba en tu mapa", "not on your map", "pas sur ta carte"),
+            ["quests.why.infight"] = L("estaba en combate", "in a fight", "en combat"),
+            ["quests.why.notinthefight"] = L("no ganó ese combate contigo", "not among the winners of that fight", "n'a pas gagné ce combat avec toi"),
+            ["quests.why.missingitems"] = L("le faltan {0} × {1}", "{0} × {1} missing", "il manque {0} × {1}"),
+            ["quests.why.notshared"] = L("paso que no se comparte (objetos, kamas o viaje)", "step not shared (items, kamas or travel)", "étape non partagée (objets, kamas ou voyage)"),
+            ["quests.why.notstarted"] = L("no tiene la misión", "quest not started", "n'a pas la quête"),
+            ["quests.why.behind"] = L("no estaba en el mismo paso", "not on the same step", "pas à la même étape"),
+            ["quests.why.requirements"] = L("no cumple las condiciones", "conditions not met", "ne remplit pas les conditions"),
+            ["alert.title"] = L("Un héroe no ha seguido", "A hero did not follow", "Un héros n'a pas suivi"),
+            ["alert.line"] = L("{0} — {1}: {2}", "{0} — {1}: {2}", "{0} — {1} : {2}"),
+            ["alert.after"] = L("Su botón de misiones queda en rojo hasta que se ponga al día.",
+                                "His quests button stays red until he has caught up.",
+                                "Son bouton des quêtes reste rouge tant qu'il n'a pas rattrapé son retard."),
+            ["alert.ok"] = L("ENTENDIDO", "GOT IT", "COMPRIS"),
             ["hint.auto"] = L("Pase automático del turno", "Automatic turn pass", "Passage automatique du tour"),
             ["hint.loot"] = L("Destinatario del botín", "Loot recipient", "Destinataire du butin"),
             ["hint.play"] = L("Tomar el control de este personaje", "Take control of this character", "Prendre la main sur ce personnage"),
@@ -328,6 +345,7 @@ namespace Heroes
                         foreach (var one in all.EnumerateArray()) AskPortrait(Long(one, "id"));
                     Render();
                     try { RenderPanel(); } catch (Exception ex) { MelonLogger.Warning($"[Heroes] The group panel: {ex.Message}"); }
+                    try { WatchQuestLags(); } catch (Exception ex) { MelonLogger.Warning($"[Heroes] The quest alert: {ex.Message}"); }
                     try { MasterChanged(); } catch (Exception ex) { MelonLogger.Warning($"[Heroes] The inventory's character: {ex.Message}"); }
                     if (_switchBusy && _switchListed) { _switchListed = false; SwitchDone(); }
                 });
@@ -809,7 +827,10 @@ namespace Heroes
                 foreach (var c in all.EnumerateArray())
                     text.Append(';').Append(Long(c, "id")).Append(',').Append(Str(c, "name")).Append(',').Append(Int(c, "level"))
                         .Append(',').Append(Bool(c, "master")).Append(Bool(c, "hero")).Append(Bool(c, "busy")).Append(Bool(c, "inFight"))
-                        .Append(Bool(c, "autoPass")).Append(',').Append(Str(c, "look"));
+                        .Append(Bool(c, "autoPass")).Append(',').Append(Bool(c, "questSync"))
+                        // The quests he stayed behind in: the quests button turns red, and back.
+                        .Append(',').Append(c.TryGetProperty("questLag", out var lag) ? lag.GetRawText() : "")
+                        .Append(',').Append(Str(c, "look"));
             return text.ToString();
         }
 
@@ -1460,6 +1481,7 @@ namespace Heroes
                                 $"colours {(colors == null ? "none" : string.Join(",", Enumerable.Range(0, Math.Min(6, colors.Count)).Select(i => colors[i])))}.");
                 if (name.Length == 0) { NativeError(T("create.error.empty")); return false; }
                 _cBusy = true;
+                NativeError("");
                 Task.Run(async () =>
                 {
                     var (code, body) = await AskAsync("heroes/create", ask);
@@ -1532,12 +1554,38 @@ namespace Heroes
             return false;
         }
 
-        private static void NativeError(string text)
+        private static void NativeError(string text) => NameError(_creationWindow, text);
+
+        /// <summary>
+        /// Why the creation screen made nobody, under its name as the game says it: the name's own
+        /// TextInput turned to its error style with the text (SetToErrorStyle), back to normal with
+        /// none. Keka-Bron/JondoEmu#215: its label found by name and shown by hand stayed hidden --
+        /// the TextInput shows it only in its error style --, and a name refused, taken or empty
+        /// left the screen as it was, «nothing happens». In the heroes window's line when the
+        /// screen has no such input.
+        /// </summary>
+        private static void NameError(VisualElement root, string text)
         {
-            var label = _creationWindow == null ? null : UQueryExtensions.Q(_creationWindow, "textInput_errorMessage", (string)null)?.TryCast<TextElement>();
-            if (label == null) { Say(text); return; }
-            label.text = text;
-            label.style.display = new StyleEnum<DisplayStyle>(DisplayStyle.Flex);
+            var input = root == null ? null
+                : UQueryExtensions.Q(root, "input_name", (string)null)?.TryCast<Il2CppCore.UILogic.Components.Figma.TextInput>();
+            try
+            {
+                if (input != null && !string.IsNullOrEmpty(text))
+                {
+                    // Its error label is in its infos, which the screen's name field keeps hidden.
+                    input.displayInfos = true;
+                    input.SetToErrorStyle(text);
+                    return;
+                }
+                if (input != null)
+                {
+                    input.isInError = false;
+                    input.UpdateViewTextInputStyle();
+                    return;
+                }
+            }
+            catch (Exception ex) { MelonLogger.Warning($"[Heroes] The creation screen's error not shown on its name: {ex.Message}"); }
+            if (!string.IsNullOrEmpty(text)) Say(text);
         }
 
         private static void CloseNativeCreation()
@@ -2015,11 +2063,7 @@ namespace Heroes
             });
         }
 
-        private static void ScreenError(string text)
-        {
-            SetText("textInput_errorMessage", text);
-            Show(Part("textInput_errorMessage"), !string.IsNullOrEmpty(text));
-        }
+        private static void ScreenError(string text) => NameError(_cTree, text);
 
         /// <summary>The screen's CRÉER: the hero made by the server on the creation screen's rules and connected beside his master.</summary>
         private static void CreateFromScreen()
@@ -3039,14 +3083,24 @@ namespace Heroes
             if (!master)
             {
                 bool auto = Bool(who, "autoPass");
-                tools.Add(Hint(Toggle(Do(() => Act("heroes/autopass", id, new Dictionary<string, object> { ["on"] = auto ? 0 : 1 })), Glyph(0), auto), "hint.auto"));
+                tools.Add(Hint(Toggle(Do(() => Act("heroes/autopass", id, new Dictionary<string, object> { ["on"] = auto ? 0 : 1 })), Glyph(0), auto, height: 20f), "hint.auto"));
+                bool questSync = Bool(who, "questSync");
+                var questButton = Toggle(Do(() => Act("heroes/quests", id, new Dictionary<string, object> { ["on"] = questSync ? 0 : 1 })), Glyph(6), questSync, height: 20f);
+                // Red while he is behind his master in a quest: which, and why, on hovering it.
+                var lags = QuestLagsOf(who);
+                if (lags.Count > 0)
+                {
+                    questButton.style.backgroundColor = new StyleColor(new UnityEngine.Color(0.72f, 0.16f, 0.14f, 1f));
+                    tools.Add(ButtonHint(questButton, () => QuestLagHint(lags), ""));
+                }
+                else tools.Add(Hint(questButton, "hint.quests"));
             }
-            tools.Add(Hint(Toggle(Do(() => Act("heroes/loot", id)), Glyph(1), lootTo == id), "hint.loot"));
+            tools.Add(Hint(Toggle(Do(() => Act("heroes/loot", id)), Glyph(1), lootTo == id, height: 20f), "hint.loot"));
             if (!master && !Bool(who, "inFight"))
             {
                 string name = Str(who, "name");
                 VisualElement play = null;
-                play = Toggle(Do(() => TakeInHand(id, name, play)), Glyph(2), false);
+                play = Toggle(Do(() => TakeInHand(id, name, play)), Glyph(2), false, height: 20f);
                 tools.Add(Hint(play, "hint.play"));
             }
             row.Add(tools);
@@ -3172,11 +3226,11 @@ namespace Heroes
             return false;
         }
 
-        private static VisualElement Toggle(Il2CppSystem.Action click, UnityEngine.Texture2D glyph, bool on)
+        private static VisualElement Toggle(Il2CppSystem.Action click, UnityEngine.Texture2D glyph, bool on, float height = 24f)
         {
             var button = new VisualElement();
             button.name = Pressable;
-            button.style.height = new StyleLength(24f);
+            button.style.height = new StyleLength(height);
             button.style.marginTop = button.style.marginBottom = new StyleLength(2f);
             button.style.backgroundColor = new StyleColor(on ? new UnityEngine.Color(0.45f, 0.62f, 0.12f, 1f) : new UnityEngine.Color(0.28f, 0.28f, 0.40f, 1f));
             Round(button, 3f);
@@ -3690,6 +3744,135 @@ namespace Heroes
             _ => null,
         };
 
+        /// <summary>The quests a hero stayed behind his master in, as the server's list names them.</summary>
+        private static List<(int Quest, string Reason, int Item, int Count)> QuestLagsOf(JsonElement who)
+        {
+            var lags = new List<(int, string, int, int)>();
+            if (!who.TryGetProperty("questLag", out var all) || all.ValueKind != JsonValueKind.Array) return lags;
+            foreach (var lag in all.EnumerateArray())
+                lags.Add((Int(lag, "quest"), Str(lag, "reason"), Int(lag, "item"), Int(lag, "count")));
+            return lags;
+        }
+
+        /// <summary>The red quests button's hint: each quest, by the client's own name, and why.</summary>
+        private static string QuestLagHint(List<(int Quest, string Reason, int Item, int Count)> lags)
+        {
+            var text = new System.Text.StringBuilder(T("hint.quests")).Append('\n').Append(T("quests.behind"));
+            foreach (var (quest, reason, item, count) in lags)
+            {
+                string why = reason == "missingitems"
+                    ? T("quests.why.missingitems", count, ItemOf(item).Name ?? "#" + item)
+                    : T("quests.why." + reason);
+                text.Append('\n').Append(T("quests.line", QuestNameOf(quest), why));
+            }
+            return text.ToString();
+        }
+
+        /// <summary>The heroes' quest lags already told in the alert, so that each is told once.</summary>
+        private static readonly HashSet<string> _lagsTold = new HashSet<string>();
+
+        private static VisualElement _alert;
+
+        /// <summary>
+        /// A hero who stayed behind his master in a quest, told in a window to close -- hard to miss,
+        /// as asked in Keka-Bron/JondoEmu#206 --, once per lag: his quests button stays red after it.
+        /// A lag gone and come back again is told again.
+        /// </summary>
+        private static void WatchQuestLags()
+        {
+            var now = new HashSet<string>();
+            var fresh = new List<string>();
+            if (_list is JsonElement list && list.TryGetProperty("characters", out var all))
+            {
+                foreach (var who in all.EnumerateArray())
+                {
+                    if (!Bool(who, "hero")) continue;
+                    foreach (var (quest, reason, item, count) in QuestLagsOf(who))
+                    {
+                        string key = $"{Long(who, "id")}:{quest}:{reason}:{item}:{count}";
+                        now.Add(key);
+                        if (_lagsTold.Contains(key)) continue;
+                        string why = reason == "missingitems"
+                            ? T("quests.why.missingitems", count, ItemOf(item).Name ?? "#" + item)
+                            : T("quests.why." + reason);
+                        fresh.Add(T("alert.line", Str(who, "name"), QuestNameOf(quest), why));
+                    }
+                }
+            }
+            _lagsTold.IntersectWith(now);
+            _lagsTold.UnionWith(now);
+            if (fresh.Count > 0) ShowQuestAlert(fresh);
+        }
+
+        private static void ShowQuestAlert(List<string> lines)
+        {
+            var layer = FindLayer();
+            if (layer == null) return;
+            InstallInputGuard();
+            // One window: what comes while it is open is added to it.
+            if (_alert == null || _alert.panel == null)
+            {
+                float w = layer.resolvedStyle.width, h = layer.resolvedStyle.height;
+                const float width = 520f;
+                var window = new WindowFigma(true, T("alert.title"), "", true);
+                window.showCloseButton = true;
+                window.name = "JondoHeroesQuestAlert";
+                window.style.position = new StyleEnum<Position>(Position.Absolute);
+                window.style.width = new StyleLength(width);
+                window.style.left = new StyleLength(float.IsNaN(w) || w <= 0 ? 300f : Math.Max(0f, (w - width) / 2f));
+                window.style.top = new StyleLength(float.IsNaN(h) || h <= 0 ? 200f : Math.Max(0f, h / 2f - 140f));
+
+                var body = new VisualElement();
+                body.name = "lines";
+                body.style.paddingLeft = body.style.paddingRight = new StyleLength(18f);
+                body.style.paddingTop = new StyleLength(14f);
+                window.Add(body);
+
+                var after = Note(T("alert.after"));
+                after.style.paddingLeft = after.style.paddingRight = new StyleLength(18f);
+                after.style.marginTop = new StyleLength(6f);
+                window.Add(after);
+
+                var footer = new VisualElement();
+                footer.style.flexDirection = new StyleEnum<FlexDirection>(FlexDirection.Row);
+                footer.style.justifyContent = new StyleEnum<Justify>(Justify.Center);
+                footer.style.paddingTop = footer.style.paddingBottom = new StyleLength(12f);
+                footer.Add(Button(Do(CloseQuestAlert), T("alert.ok"), strong: true, enabled: true));
+                window.Add(footer);
+
+                layer.Add(window);
+                KeepEvents(window);
+                var close = window.header?.rightButton;
+                if (close != null) close.add_Clicked(Do(CloseQuestAlert));
+                _alert = window;
+            }
+            var into = UQueryExtensions.Q(_alert, "lines", (string)null);
+            foreach (string line in lines)
+            {
+                var label = Label(line, 13f);
+                label.style.color = new StyleColor(Red);
+                into?.Add(label);
+            }
+            _alert.BringToFront();
+        }
+
+        private static void CloseQuestAlert()
+        {
+            try { _alert?.RemoveFromHierarchy(); } catch { }
+            _alert = null;
+        }
+
+        private static string QuestNameOf(int quest)
+        {
+            try
+            {
+                string name = Il2CppCore.DataCenter.DataCenterModule.questsDataRoot?.GetQuestById(quest)?.name;
+                if (!string.IsNullOrEmpty(name)) return name;
+            }
+            catch { }
+            return "#" + quest;
+        }
+
         /// <summary>
         /// A button's hint as the game writes its buttons': the words, then the key in a box of its
         /// own when it has one, above the button and centred on it.
@@ -3713,8 +3896,11 @@ namespace Heroes
             try
             {
                 if (_hint == null || _hint.panel == null) return;
-                _hint.style.flexDirection = new StyleEnum<FlexDirection>(FlexDirection.Row);
-                _hint.style.alignItems = new StyleEnum<Align>(Align.Center);
+                // The words and the key's box side by side -- but a hint of several lines keeps its
+                // lines one under the other (ShowHint): side by side they ran into one, off the screen.
+                bool lines = (text ?? "").Contains('\n');
+                _hint.style.flexDirection = new StyleEnum<FlexDirection>(lines ? FlexDirection.Column : FlexDirection.Row);
+                _hint.style.alignItems = new StyleEnum<Align>(lines ? Align.FlexStart : Align.Center);
                 if (!string.IsNullOrEmpty(keys))
                 {
                     var key = new VisualElement();
@@ -3775,12 +3961,12 @@ namespace Heroes
 
         // ─── The panel's glyphs: a sword, a sack, a «play» ───────────────────────────────
 
-        private static readonly UnityEngine.Texture2D[] _glyphs = new UnityEngine.Texture2D[6];
+        private static readonly UnityEngine.Texture2D[] _glyphs = new UnityEngine.Texture2D[7];
 
         /// <summary>
         /// A glyph, drawn here white with a dark edge: 0 the automatic pass (a sword), 1 the loot
         /// recipient (a tied sack), 2 taking him in hand (a «play»), 3 his bag (a chest), 4 his
-        /// characteristics (three bars), 5 his spells (a star).
+        /// characteristics (three bars), 5 his spells (a star), 6 quest sharing (a checklist).
         /// </summary>
         private static UnityEngine.Texture2D Glyph(int which)
         {
@@ -3799,10 +3985,11 @@ namespace Heroes
                             float d = which switch
                             {
                                 0 => Sword(x, y), 1 => Sack(x, y), 2 => Play(x, y),
-                                3 => Chest(x, y), 4 => Bars(x, y), _ => Star(x, y),
+                                3 => Chest(x, y), 4 => Bars(x, y), 5 => Star(x, y), _ => Box(x, y, 16f, 16f, 10f, 12f),
                             };
                             UnityEngine.Color c;
-                            if ((which == 1 && Knot(x, y)) || (which == 3 && d < -1.1f && ChestLines(x, y))) c = edge;
+                            if ((which == 1 && Knot(x, y)) || (which == 3 && d < -1.1f && ChestLines(x, y))
+                                || (which == 6 && QuestLines(x, y))) c = edge;
                             else if (d < -1.1f) c = UnityEngine.Color.white;
                             else if (d < 0.5f) c = edge;
                             else continue;
@@ -3815,6 +4002,11 @@ namespace Heroes
             texture.hideFlags = UnityEngine.HideFlags.DontUnloadUnusedAsset;
             return _glyphs[which] = texture;
         }
+
+        private static bool QuestLines(float x, float y)
+            => Box(x, y, 16f, 10f, 6f, 1f) < 0f
+               || Capsule(x, y, 11f, 17f, 14f, 21f, 1f) < 0f
+               || Capsule(x, y, 14f, 21f, 21f, 15f, 1f) < 0f;
 
         private static float Circle(float x, float y, float cx, float cy, float r)
             => (float)Math.Sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy)) - r;

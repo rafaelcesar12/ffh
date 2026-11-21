@@ -53,7 +53,7 @@ namespace Jondo.Unity.Server.Handlers
                 await SendAsync(stream, Op.Lqn, ConnectionProtocol.BuildInfoMessage(Popup, ChangeAlreadyWaiting));
                 return true;
             }
-            await ItemUseHandler.SpendOneAsync(stream, item.Uid);
+            await ItemUseHandler.SpendOneAsync(SessionContext.Current, item.Uid);
             await SendAsync(stream, Op.Lqn, ConnectionProtocol.BuildInfoMessage(Popup,
                 change == CharacterRemodel.Change.Name ? NameNextTime : SexNextTime));
             Console.WriteLine($"[Remodel] {SessionContext.State.CharacterName} will change {change} on the next connection.");
@@ -61,10 +61,10 @@ namespace Jondo.Unity.Server.Handlers
         }
 
         /// <summary>Entering the world with a name change waiting: the Rename window, with the name as it is.</summary>
-        public static async Task OnEnterWorldAsync(NetworkStream stream, DbCharacter character)
+        public static async Task OnEnterWorldAsync(GameSession session, DbCharacter character)
         {
             if (CharacterRemodel.PendingOf(character.Id) != CharacterRemodel.Change.Name) return;
-            await SendAsync(stream, Op.Kvk, Pb.New().Str(1, character.Name).Build());
+            await session.SendAsync(new Jondo.Unity.Protocol.Game.CharacterNameSuggestionEvent(character.Name));
         }
 
         /// <summary>lvw { f1: the new name }: taken if a change is waiting and the name is free and well made.</summary>

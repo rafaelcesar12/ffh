@@ -142,6 +142,35 @@ namespace Jondo.Unity.Tests.Quests
         }
 
         [Fact]
+        public void An_element_that_only_takes_leaves_its_objective_to_the_closing_row()
+        {
+            // «Coloca los tótems y sopla en la caracola» (10070): the conch closes it, and each
+            // pillar of the rock (490938 among them) only takes its totem.
+            var book = new QuestBindingBook();
+            var conch = new QuestBinding { ObjectiveId = 10070, QuestId = 1663, Kind = QuestBindingKind.Use, MapId = 154141187 };
+            var pillar = new QuestBinding
+            {
+                ObjectiveId = 10070,
+                QuestId = 1663,
+                Kind = QuestBindingKind.Click,
+                OnlyGives = true,
+                SpendsRequired = true,
+                Elements = new List<(long, int)> { (154141187, 490938) },
+            };
+            book.Add(conch);
+            book.Add(pillar);
+
+            Assert.Same(conch, book.Of(10070));
+            Assert.Same(pillar, Assert.Single(book.At(154141187, 490938)));
+
+            // Read the other way round, the closing row still wins the objective.
+            var reversed = new QuestBindingBook();
+            reversed.Add(pillar);
+            reversed.Add(conch);
+            Assert.Same(conch, reversed.Of(10070));
+        }
+
+        [Fact]
         public void A_row_that_says_nothing_about_type_gets_minus_one_and_not_zero()
         {
             // The one field where "not written" and "written as zero" cannot be told apart by
@@ -161,6 +190,36 @@ namespace Jondo.Unity.Tests.Quests
                 Assert.Equal(-1, book.Of(1)!.TypeId);
                 Assert.Equal(0, book.Of(5)!.TypeId);
                 Assert.Equal(QuestBinding.DefaultSkill, book.Of(1)!.SkillId);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Fact]
+        public void A_row_marked_all_asks_for_every_map_of_its_list_and_one_element_of_each()
+        {
+            // «Sigue la pista de las bayas» (2451, 18566): the bushes of four maps are inspected, and
+            // the map with two berry bushes takes either; a row that does not say it keeps the
+            // «any one of them» reading.
+            string path = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName() + ".json");
+            File.WriteAllText(path, """
+            { "bindings": [
+              { "objective": 18566, "quest": 2451, "all": true, "elements": [
+                  {"map": 1, "element": 10}, {"map": 2, "element": 20}, {"map": 2, "element": 21} ] },
+              { "objective": 9820, "quest": 1, "elements": [ {"map": 3, "element": 30}, {"map": 4, "element": 40} ] }
+            ] }
+            """);
+
+            try
+            {
+                var book = QuestBindingContent.Load(path);
+                var all = book.Of(18566)!;
+                Assert.True(all.AllMaps);
+                Assert.Equal(2, all.Elements.Select(e => e.MapId).Distinct().Count());
+                Assert.Single(book.At(2, 21));
+                Assert.False(book.Of(9820)!.AllMaps);
             }
             finally
             {

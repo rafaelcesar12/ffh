@@ -19,7 +19,7 @@ namespace Jondo.Unity.Server.Network
         private const int LegendaryFlag = 2048, DofusType = 23, PrismaraditeType = 217, TrophyType = 151;
 
         /// <summary>The equipment positions the harness uses: the weapon, the first Dofus slot, the shield.</summary>
-        private static readonly int[] HarnessPositions = { 1, 9, 15 };
+        private static readonly int[] HarnessPositions = { 1, 9, 15, 31 };
 
         /// <summary>The item types worn in the weapon's hand.</summary>
         private static readonly HashSet<int> WeaponTypes = new() { 2, 3, 4, 5, 6, 7, 8, 19, 20, 21, 22, 114, 271 };
@@ -106,6 +106,24 @@ namespace Jondo.Unity.Server.Network
         }
 
         /// <summary>
+        /// { side, honour?, pvp? }: the slot's character sworn to a side (2 neutral, 3 Bonta, 4
+        /// Brakmar), with that much honour more and his PvP switch as given.
+        /// </summary>
+        private static Respuesta TestAlign(string cuerpo)
+        {
+            var session = TestSessionOnline();
+            if (session == null) return Mal(404, "offline");
+            long character = session.State.CharacterId;
+            int side = (int)Numero(cuerpo, "side");
+            if (side != Alignments.Neutral && side != Alignments.Bonta && side != Alignments.Brakmar) return Mal(400, "side");
+            Alignments.Set(character, side, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            int honour = (int)Numero(cuerpo, "honour");
+            if (honour > 0) Alignments.AddHonour(character, honour);
+            var now = Alignments.SetPvp(character, Numero(cuerpo, "pvp") != 0);
+            return Bien(new { character, side = now.Side, honour = now.Honour, grade = now.HonourGrade, pvp = now.PvpOn });
+        }
+
+        /// <summary>
         /// { gid }: the item worn by the slot's character, out of a fight -- in the weapon's hand,
         /// the shield's or the first Dofus slot -- and whatever the harness had put on before back
         /// in the bag. The next fight reads it as it reads anybody's equipment.
@@ -121,7 +139,10 @@ namespace Jondo.Unity.Server.Network
             var item = none ? null : ItemOf(gid);
             string effects = "[]";
             if (!none && (item == null || !DatabaseManager.TryGetItemTemplateEffects(gid, out effects))) return Mal(404, "item");
-            int position = item == null ? 0 : WeaponTypes.Contains(item.Value.Type) ? 1 : item.Value.Type == 82 ? 15 : 9;
+            // A capture net goes in the combat consumables' slot, the only one RideCapture reads.
+            int position = item == null ? 0
+                : Breeding.NetByItem(gid) != null ? Managers.RideCapture.ConsumableSlot
+                : WeaponTypes.Contains(item.Value.Type) ? 1 : item.Value.Type == 82 ? 15 : 9;
             using (var connection = new SqliteConnection(DatabaseManager.WorldConnectionString))
             {
                 connection.Open();

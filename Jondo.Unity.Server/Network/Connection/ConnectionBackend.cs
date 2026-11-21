@@ -17,7 +17,11 @@ internal sealed class ConnectionBackend : IConnectionBackend
         Console.WriteLine($"[Connection Server] Account {accountId}: {servers.Count} server(s), {characters.Count} character(s).");
         return new IdentificationSuccess(accountId, account?.Nickname ?? "Jondo", GameServerProxy.BuildAccountTag(accountId),
             ConnectionAccountProjection.ServerList(servers, characters, DateTimeOffset.Now),
-            Subscription.EndDateFor(accountId), new AccountRights(false, false, false, false), null, null, null);
+            Subscription.EndDateFor(accountId),
+            // The client builds its admin menu (ffa.bdwh) from the identification's rights: only
+            // the second flag matters, and it is the staff's (moderator and above).
+            new AccountRights(false, DatabaseManager.GetAccountRole(accountId) >= (int)Jondo.Unity.Protocol.Game.Hierarchy.RoleModerator,
+                false, false), null, null, null);
     }
 
     public bool IsServerJoinable(int serverId) => DatabaseManager.IsServerJoinable(serverId);
@@ -66,6 +70,10 @@ internal static class ConnectionAccountProjection
         _ => throw new InvalidOperationException($"Unknown database character gender: {value}.")
     };
 
+#if JONDO_PROTOCOL_3_8_1_2
+    // The November binding leaves the new scalar breed code raw-only.
+    private static CharacterBreed? Breed(int _) => null;
+#else
     // There is no breed 19: the Forgelance is 20, and the client reads wire value 18 back as 20
     // (gr's constructor; anything past 18 is no breed at all).
     private static CharacterBreed Breed(int value) => value switch
@@ -79,4 +87,5 @@ internal static class ConnectionAccountProjection
         20 => CharacterBreed.Forgelance,
         _ => throw new InvalidOperationException($"Unknown database character breed: {value}.")
     };
+#endif
 }

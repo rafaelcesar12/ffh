@@ -43,6 +43,31 @@ namespace Jondo.Unity.Tests.World
         private static byte[] Jbn(long owner) => ConnectionProtocol.Push(Op.Jbn, Pb.New().Var(2, owner).Build());
 
         [Fact]
+        public async Task Repeated_furniture_replies_use_the_visited_room_and_current_owner_permissions()
+        {
+            Merkasako.Initialize();
+            long map = Merkasako.MapOfTheme(Merkasako.DefaultTheme);
+            int theme = Merkasako.ThemeOfMap(map);
+            await using var guest = await ClientPipe.OpenAsync(VisitorAccount, _visitor, map);
+            guest.Session.State.HavenBagOwnerId = _owner;
+            using var wrong = SessionContext.Push(GameSession.SinSocket());
+            try
+            {
+                HavenBagStore.SaveFurniture(_owner, theme, [new() { Cell = 13, TypeId = 27, Orientation = 2 }]);
+                HavenBagStore.SetShared(_owner, HavenBagStore.SharedWithGuild);
+                await MerkasakoHandler.SendFurnitureAsync(guest.Session);
+                Assert.Equal(Convert.FromHexString("0a06080d101b1802"), await guest.Next(Op.Jbu));
+                Assert.Equal(Convert.FromHexString("0802"), await guest.Next(Op.Jaz));
+                HavenBagStore.SaveFurniture(_owner, theme, []);
+                HavenBagStore.SetShared(_owner, HavenBagStore.SharedWithFriends);
+                await MerkasakoHandler.SendFurnitureAsync(guest.Session);
+                Assert.Empty(await guest.Next(Op.Jbu));
+                Assert.Equal(Convert.FromHexString("0801"), await guest.Next(Op.Jaz));
+            }
+            finally { HavenBagStore.SaveFurniture(_owner, theme, []); }
+        }
+
+        [Fact]
         public void A_bag_is_open_to_mutual_friends_once_shared_with_them()
         {
             Assert.True(_owner > 0 && _visitor > 0);
@@ -170,12 +195,17 @@ namespace Jondo.Unity.Tests.World
         public void The_guild_list_carries_the_bag_open_to_the_guild()
         {
             var member = new GuildStore.Member { CharacterId = _owner, Rank = 1 };
-            string Entry() => Convert.ToHexString(GuildProtocol.BuildMember(member, "Anfitrion-Saco", 50, OwnerAccount, 8, 0));
+            Jondo.Unity.Protocol.Game.GuildMember Entry()
+            {
+                var row = Assert.Single(GuildRosterMessages.Live.Snapshot(new[] { member }).Members);
+                var basic = Assert.IsType<Jondo.Unity.Protocol.Game.CharacterComplementCaseCharacterBasicInformation>(row.ComplementCase).Value;
+                return Assert.IsType<Jondo.Unity.Protocol.Game.CharacterBasicInformationComplementCaseSocialMember>(basic.ComplementCase).Value.GuildMember!;
+            }
 
             HavenBagStore.SetShared(_owner, HavenBagStore.SharedWithFriends);
-            Assert.Contains("18034200", Entry());          // f7 { f2 {}, f3 3, f8 {} }: no f5
+            Assert.False(Entry().HavenBagShared);
             HavenBagStore.SetShared(_owner, HavenBagStore.SharedWithGuild);
-            Assert.Contains("180328014200", Entry());      // f3 3, f5 1, f8 {}
+            Assert.True(Entry().HavenBagShared);
         }
     }
 }

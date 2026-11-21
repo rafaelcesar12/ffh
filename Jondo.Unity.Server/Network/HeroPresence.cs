@@ -16,7 +16,7 @@ namespace Jondo.Unity.Server.Network
     /// The heroes stand beside their master and follow him. A
     /// hero has no client: his actor is the server's to put on the map (jsn), to walk (jsj, the
     /// master's own walk, ending a few steps behind him) and to take off (kmu), and every map's
-    /// actor list carries the heroes of the people on it (ConnectionProtocol.BuildMapActors).
+    /// actor list carries the heroes of the people on it (MapInformationMessages).
     /// </remarks>
     internal static class HeroPresence
     {
@@ -46,6 +46,9 @@ namespace Jondo.Unity.Server.Network
             state.MapId = master.State.MapId;
             state.CellId = BesideOf(master, hero.CharacterId);
             state.Orientation = master.State.Orientation;
+            // A zaap reached at his master's side is discovered by him too: a hero has no client to
+            // open it with, and each would otherwise have to be played there on his own.
+            ZaapDiscoveries.Discover(hero.CharacterId, state.MapId);
             await DrawAsync(master, hero);
         }
 
@@ -56,7 +59,7 @@ namespace Jondo.Unity.Server.Network
         private static async Task LeaveAsync(long mapId, long heroId)
         {
             if (mapId <= 0) return;
-            try { await SessionRegistry.RemoveFromMapAsync(mapId, heroId, Guid.Empty); }
+            try { await MapPresenceService.Live.RemoveAsync(SessionRegistry.OnMap(mapId), heroId); }
             catch (Exception ex) { Program.LogDebug($"[Heroes] {heroId} could not be taken off map {mapId}: {ex.Message}"); }
         }
 
@@ -68,8 +71,10 @@ namespace Jondo.Unity.Server.Network
                 if (hero.Session.State.IsInFight) continue;
                 if (mapLeft > 0 && mapLeft != master.State.MapId) await LeaveAsync(mapLeft, hero.CharacterId);
                 await ArriveAsync(master, hero);
-                // What his last fight set aside, and his level, as a player's on reaching a map.
-                try { await Achievements.ForHeroAsync(master, hero.Session); }
+                // What his last fight set aside, his level, and the zone and the map he reached, as
+                // a player's on reaching a map.
+                long map = master.State.MapId;
+                try { await Achievements.ForHeroAsync(master, hero.Session, map, MapManager.GetMapInfo(map)?.SubAreaId ?? 0); }
                 catch (Exception ex) { Program.LogDebug($"[Heroes] {hero.CharacterId}'s achievements not looked at: {ex.Message}"); }
             }
         }
@@ -98,7 +103,7 @@ namespace Jondo.Unity.Server.Network
                 if (path.Count < 2) path = new List<int> { state.CellId, target };
                 state.CellId = target;
                 state.Orientation = master.State.Orientation;
-                try { await master.Map.SendAsync(new GameMapMovementEvent(path, hero.CharacterId, false, Pace: 0)); }
+                try { await master.Map.SendAsync(new GameMapMovementEvent(path, hero.CharacterId, false)); }
                 catch (Exception ex) { Program.LogDebug($"[Heroes] {hero.CharacterId} could not follow: {ex.Message}"); }
             }
         }
@@ -126,8 +131,8 @@ namespace Jondo.Unity.Server.Network
             if (character == null || state.IsInFight || master.State.IsInFight) return;
             try
             {
-                await SessionRegistry.BroadcastToMapAsync(state.MapId, ConnectionProtocol.Push(Op.Jsn,
-                    ConnectionProtocol.BuildActorRefreshed(character, state.CellId, state.Orientation, master.AccountId)), Guid.Empty);
+                await SessionRegistry.BroadcastToMapAsync(state.MapId,
+                    MapActorMessages.Refreshed(character, state.CellId, state.Orientation, master.AccountId), Guid.Empty);
             }
             catch (Exception ex) { Program.LogDebug($"[Heroes] {hero.CharacterId} could not be drawn: {ex.Message}"); }
         }
