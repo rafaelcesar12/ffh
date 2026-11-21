@@ -31,6 +31,12 @@ namespace Jondo.Unity.Server
         /// <summary>The most movement points a character can have; 0 means no cap (the official one is 6).</summary>
         public int MaxMovementPoints { get; set; }
 
+        /// <summary>
+        /// The most range a character's gear gives; 0 means no cap (the official one is 6). Only the
+        /// gear: a spell's range buff in a fight still adds on top, as the movement and action points do.
+        /// </summary>
+        public int MaxRange { get; set; }
+
         /// <summary>Extra experience for everybody, in percent: what fights, quests and rewards give.</summary>
         public int ExperienceBonusPercent { get; set; }
         

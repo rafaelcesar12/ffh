@@ -64,6 +64,32 @@ public sealed class CharacteristicParityTests
         finally { ServerSettings.UseForTests(previous); }
     }
 
+    [Theory]
+    [InlineData(0, 9)]
+    [InlineData(6, 6)]
+    [InlineData(12, 9)]
+    public void Gear_range_is_capped_on_the_sheet_and_in_the_fight(int cap, int expected)
+    {
+        var previous = ServerSettings.Current;
+        try
+        {
+            ServerSettings.UseForTests(new() { MaxActionPoints = 12, MaxMovementPoints = 6, MaxRange = cap });
+            var own = GameSession.SinSocket();
+            own.State.CharacterId = 8_941_780_003;
+            own.State.CharacterLevel = 200;
+            Add(own, 1, 0, 1, (117, 9), (111, 9), (128, 5)); // +9 range, +9 AP, +5 MP from gear.
+            using var context = SessionContext.Push(own);
+            Assert.Equal(9, own.Combat.GetEquipBonus(Stat.Range));
+            Assert.Equal(expected, own.Combat.GetPlayerRange());
+            var range = Assert.IsType<CharacterCharacteristicCaseDetailed>(CharacteristicsMessages.Live.Snapshot(own).Stats
+                .Characteristics.Single(s => s.CharacteristicId == Stat.Range).CharacteristicCase).Value;
+            Assert.Equal(expected, range.Base + range.Additional + range.Temporary + range.Equipment + range.Context + range.Alignment);
+            var fighter = FightHandler.BuildPlayerFighter(new FightInstance(987_003, 191105026));
+            Assert.Equal((12, 6, expected), (fighter.MaxAP, fighter.MaxMP, fighter.Range));
+        }
+        finally { ServerSettings.UseForTests(previous); }
+    }
+
     [Fact]
     public void Multiple_general_sets_bonus_slots_scrolls_and_alterations_feed_combat_and_owner_sheet()
     {

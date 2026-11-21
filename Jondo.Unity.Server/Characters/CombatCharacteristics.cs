@@ -9,7 +9,7 @@ public sealed class CombatCharacteristics
 {
     private readonly int level, strength, intelligence, chance, agility, vitality;
     private readonly IReadOnlyDictionary<int, long> equipment, alterations;
-    private readonly int apCap, mpCap;
+    private readonly int apCap, mpCap, rangeCap;
 
     internal CombatCharacteristics(GameSession session)
     {
@@ -21,6 +21,7 @@ public sealed class CombatCharacteristics
         alterations = new Dictionary<int, long>(Alterations.Bonuses(state.CharacterId));
         apCap = ServerSettings.Current.MaxActionPoints;
         mpCap = ServerSettings.Current.MaxMovementPoints;
+        rangeCap = ServerSettings.Current.MaxRange;
     }
 
     public int GetEquipBonus(int statId)
@@ -34,6 +35,8 @@ public sealed class CombatCharacteristics
         => ServerSettings.Capped(checked(PlayerInnateAp() + GetEquipBonus(Stat.ActionPoints)), apCap);
     public int GetPlayerMaxMp()
         => ServerSettings.Capped(checked(CharacteristicRules.PlayerBaseMp + GetEquipBonus(Stat.MovementPoints)), mpCap);
+    public int GetPlayerRange()
+        => ServerSettings.Capped(GetEquipBonus(Stat.Range), rangeCap);
 
     public int IniciativaInvertida() => checked(strength + intelligence + chance + agility);
     public int IniciativaDelEquipo()

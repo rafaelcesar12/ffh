@@ -840,7 +840,7 @@ namespace Jondo.Unity.Server.Handlers
                 // Push (84 on equipment, which the client draws as 85) and range (19).
                 PushDamage = stats.GetEquipBonus(84),
                 Vitality = GameState.TotalVitality + stats.GetEquipBonus(11),
-                Range = stats.GetEquipBonus(19),
+                Range = stats.GetPlayerRange(),
                 LookBoneId = 744,
                 IsMonster = false
             };

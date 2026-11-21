@@ -81,6 +81,7 @@ internal sealed class CharacteristicsMessages(ICharacteristicsMessagesBackend ba
             {
                 Stat.ActionPoints => ServerSettings.Current.MaxActionPoints,
                 Stat.MovementPoints => ServerSettings.Current.MaxMovementPoints,
+                Stat.Range => ServerSettings.Current.MaxRange,
                 _ => 0,
             };
             long total = checked(value + gear + temporary);
@@ -132,7 +133,7 @@ internal sealed class CharacteristicsMessages(ICharacteristicsMessagesBackend ba
             CharacteristicKind.Usable => new CharacterCharacteristicCaseUsable(new(checked((int)value.Base), checked((int)value.Context),
                 checked((int)(value.Equipment + value.Temporary)), 0, 0, 0, 0)),
             _ => new CharacterCharacteristicCaseDetailed(new(checked((int)value.Base), checked((int)value.Additional),
-                checked((int)value.Temporary), 0, checked((int)value.Equipment), 0)),
+                checked((int)value.Temporary), 0, checked((int)value.Equipment), checked((int)value.Context))),
         });
 
     private sealed class LiveBackend : ICharacteristicsMessagesBackend
