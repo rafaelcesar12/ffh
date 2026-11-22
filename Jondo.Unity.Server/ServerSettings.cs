@@ -133,6 +133,19 @@ namespace Jondo.Unity.Server
         public bool WantedBeatenStaysAway { get; set; }
 
         /// <summary>
+        /// FFH: how long a criminal stands in his group before he moves on, in minutes, and waits
+        /// <see cref="WantedRetryMinutes"/> for his next chance; a group in a fight keeps him. 0, the
+        /// game's, keeps him there until he is beaten.
+        /// </summary>
+        public int WantedStayMinutes { get; set; }
+
+        /// <summary>
+        /// FFH: at most one criminal about in each area (Amakna, Astrub, the Cania plains...) at a
+        /// time; off, the game's, one in each of their zones.
+        /// </summary>
+        public bool WantedOnePerArea { get; set; }
+
+        /// <summary>
         /// The hero mode (<see cref="Managers.Heroes"/>): the other characters of one's account
         /// connected beside one's own, fighting at one's side and played by hand in their turns.
         /// </summary>

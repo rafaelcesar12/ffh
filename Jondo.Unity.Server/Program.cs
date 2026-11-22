@@ -147,6 +147,10 @@ namespace Jondo.Unity.Server
             // boss in his last room, which without this does not exist.
             Managers.DungeonManager.Initialize();
             Managers.MobSpawnManager.InitializeAndSpawnAll();
+            // The criminals beaten before this start stay away their hours after it.
+            Managers.WantedPosters.KeepAbsencesIn(
+                System.IO.Path.Combine(System.IO.Path.GetDirectoryName(Paths.WorldDb)!, "wanted_away.json"),
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
 
             Console.WriteLine("[+] Initializing Map Manager...");
             MapManager.Initialize();

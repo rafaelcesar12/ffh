@@ -169,6 +169,104 @@ namespace Jondo.Unity.Tests.World
             finally { ServerSettings.UseForTests(previous); }
         }
 
+        /// <summary>FFH: a criminal moves on after his stay, waits his next chance, and his absences outlive a restart.</summary>
+        [Fact]
+        public void Ffh_a_criminal_moves_on_after_his_stay_and_his_absence_outlives_a_restart()
+        {
+            var previous = ServerSettings.Current;
+            string file = Path.Combine(Path.GetTempPath(), $"wanted_away_{Guid.NewGuid():N}.json");
+            try
+            {
+                LoadTwo();
+                const long now = 1_000_000_000, hour = 3_600_000;
+                ServerSettings.UseForTests(new() { WantedStayMinutes = 60, WantedRetryMinutes = 60, WantedBeatenStaysAway = true });
+
+                WantedPosters.Placed(900500, 77, -5, now);
+                Assert.Empty(WantedPosters.Overstayed(now + hour - 1));
+                Assert.Equal(new[] { (900500, 77L, -5L) }, WantedPosters.Overstayed(now + hour));
+                Assert.Equal(new[] { (900500, 77L, -5L) }, WantedPosters.Standing());
+
+                WantedPosters.Left(900500, now + hour);
+                Assert.False(WantedPosters.IsAbout(900500));
+                Assert.DoesNotContain(900500, WantedPosters.Due(now + 2 * hour - 1).Select(c => c.Monster));
+                Assert.Contains(900500, WantedPosters.Due(now + 2 * hour).Select(c => c.Monster));
+
+                // 0, the game's: he stays until beaten.
+                ServerSettings.UseForTests(new());
+                WantedPosters.Placed(900501, 88, -9, now);
+                Assert.Empty(WantedPosters.Overstayed(now + 100 * hour));
+
+                // Beaten, kept in the file, and still away after a «restart».
+                ServerSettings.UseForTests(new() { WantedBeatenStaysAway = true });
+                long real = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                WantedPosters.KeepAbsencesIn(file, real);
+                WantedPosters.Released(88, -9, real, beaten: true);
+                Assert.True(File.Exists(file));
+
+                LoadTwo();
+                Assert.Contains(900501, WantedPosters.Due(real).Select(c => c.Monster));
+                WantedPosters.KeepAbsencesIn(file, real);
+                Assert.DoesNotContain(900501, WantedPosters.Due(real + 1).Select(c => c.Monster));
+                Assert.Contains(900501, WantedPosters.Due(real + (long)(WantedPosters.Absence + WantedPosters.AbsenceSpread).TotalMilliseconds).Select(c => c.Monster));
+            }
+            finally
+            {
+                ServerSettings.UseForTests(previous);
+                LoadTwo();
+                File.Delete(file);
+            }
+        }
+
+        /// <summary>FFH, on the real world: one criminal to an area, and the one who moves on gives his place back.</summary>
+        [Fact]
+        public void Ffh_one_criminal_to_an_area_and_the_one_who_moves_on_leaves_his_group_as_it_was()
+        {
+            if (!File.Exists(Paths.WorldDb) || !File.Exists(Paths.WantedJson)) return;
+            var previous = ServerSettings.Current;
+            try
+            {
+                Interactives.Initialize();
+                MobSpawnManager.EnsureMonsterData();
+                MobSpawnManager.InitializeAndSpawnAll();
+                LoadTheRealOnes();
+                ServerSettings.UseForTests(new()
+                {
+                    WantedChancePercent = 100, WantedOnePerArea = true, WantedStayMinutes = 60, WantedRetryMinutes = 60,
+                });
+                long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                static int Area(int monster)
+                {
+                    int zone = WantedPosters.ByMonster(monster)!.Subareas[0];
+                    int area = Interactives.AreaOfSubArea(zone);
+                    return area >= 0 ? area : -1_000_000 - zone;
+                }
+
+                Assert.True(MobSpawnManager.RotateCriminalsNow(now) > 0);
+                var first = WantedPosters.Standing();
+                int areas = WantedPosters.All.Select(c => Area(c.Monster)).Distinct().Count();
+                Assert.InRange(first.Count, 2, areas);
+                Assert.Equal(first.Count, first.Select(s => Area(s.Monster)).Distinct().Count());
+
+                // An hour on: every one of them moves on, out of his group, and does not come straight back.
+                long later = now + 3_600_000;
+                MobSpawnManager.RotateCriminalsNow(later);
+                foreach (var (monster, map, group) in first)
+                {
+                    Assert.NotEqual((map, group), WantedPosters.WhereIs(monster) ?? (0, 0));
+                    var stood = MobSpawnManager.GetMobsForMap(map).SingleOrDefault(g => g.MobId == group);
+                    if (stood != null) Assert.DoesNotContain(stood.Members, m => m.Monster?.Id == monster);
+                    Assert.DoesNotContain(monster, WantedPosters.Due(later + 1).Select(c => c.Monster));
+                }
+                var second = WantedPosters.Standing();
+                Assert.Equal(second.Count, second.Select(s => Area(s.Monster)).Distinct().Count());
+            }
+            finally
+            {
+                ServerSettings.UseForTests(previous);
+                LoadTheRealOnes();
+            }
+        }
+
         /// <summary>A map emptied or put back lets its criminal go.</summary>
         [Fact]
         public void A_map_cleared_lets_its_criminal_go()

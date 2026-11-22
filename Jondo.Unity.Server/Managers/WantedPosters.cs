@@ -87,6 +87,13 @@ namespace Jondo.Unity.Server.Managers
         /// <summary>The group each criminal last stood in, once it has gone: whoever beat it may still say he took him.</summary>
         private static readonly Dictionary<int, (long Map, long Group)> _lastStood = new();
 
+        /// <summary>When each standing criminal was put where he is, in Unix milliseconds.</summary>
+        private static readonly Dictionary<int, long> _placedAt = new();
+
+        /// <summary>Where the absences are kept between starts, or null: the tests keep nothing.</summary>
+        private static string? _store;
+        private static bool _dirty;
+
         /// <summary>Reads the file, once.</summary>
         public static void Load()
         {
@@ -122,6 +129,9 @@ namespace Jondo.Unity.Server.Managers
                 _placed.Clear();
                 _awayUntil.Clear();
                 _lastStood.Clear();
+                _placedAt.Clear();
+                _store = null;
+                _dirty = false;
                 Read(root);
             }
         }
@@ -203,11 +213,12 @@ namespace Jondo.Unity.Server.Managers
         }
 
         /// <summary>This criminal now stands in that group.</summary>
-        public static void Placed(int monster, long map, long group)
+        public static void Placed(int monster, long map, long group, long nowMs = 0)
         {
             lock (_gate)
             {
                 _placed[monster] = (map, group);
+                _placedAt[monster] = nowMs;
                 _awayUntil.Remove(monster);
                 _lastStood.Remove(monster);
             }
@@ -224,12 +235,15 @@ namespace Jondo.Unity.Server.Managers
                 foreach (var pair in _placed.Where(p => p.Value.Map == map && p.Value.Group == group).ToList())
                 {
                     _placed.Remove(pair.Key);
+                    _placedAt.Remove(pair.Key);
                     _lastStood[pair.Key] = pair.Value;
                     // FFH: beaten is beaten, whoever won -- away the hours a capture keeps him.
                     var wait = beaten && ServerSettings.Current.WantedBeatenStaysAway ? AbsenceFor(pair.Key, _dice) : Grace;
                     long back = nowMs + (long)wait.TotalMilliseconds;
                     _awayUntil[pair.Key] = _awayUntil.TryGetValue(pair.Key, out long until) ? Math.Max(until, back) : back;
+                    _dirty = true;
                 }
+                Flush();
             }
         }
 
@@ -258,6 +272,8 @@ namespace Jondo.Unity.Server.Managers
                 var away = AbsenceFor(monster, dice);
                 long until = nowMs + (long)away.TotalMilliseconds;
                 _awayUntil[monster] = _awayUntil.TryGetValue(monster, out long already) ? Math.Max(already, until) : until;
+                _dirty = true;
+                Flush();
                 return away;
             }
         }
@@ -285,8 +301,100 @@ namespace Jondo.Unity.Server.Managers
             var settings = ServerSettings.Current;
             if (settings.WantedChancePercent >= 100 || dice.Next(100) < settings.WantedChancePercent) return true;
             lock (_gate)
-                _awayUntil[monster] = nowMs + (long)TimeSpan.FromMinutes(Math.Max(1, settings.WantedRetryMinutes)).TotalMilliseconds;
+            {
+                _awayUntil[monster] = nowMs + RetryMs(settings);
+                _dirty = true;
+            }
             return false;
+        }
+
+        private static long RetryMs(ServerSettings settings)
+            => (long)TimeSpan.FromMinutes(Math.Max(1, settings.WantedRetryMinutes)).TotalMilliseconds;
+
+        /// <summary>The criminals standing somewhere now, with where.</summary>
+        public static IReadOnlyList<(int Monster, long Map, long Group)> Standing()
+        {
+            lock (_gate) return _placed.Select(p => (p.Key, p.Value.Map, p.Value.Group)).ToList();
+        }
+
+        /// <summary>
+        /// FFH: the criminals that have stood where they are <see cref="ServerSettings.WantedStayMinutes"/>
+        /// or longer, and should move on. None when the setting is 0.
+        /// </summary>
+        public static IReadOnlyList<(int Monster, long Map, long Group)> Overstayed(long nowMs)
+        {
+            int stay = ServerSettings.Current.WantedStayMinutes;
+            if (stay <= 0) return Array.Empty<(int, long, long)>();
+            long limit = (long)TimeSpan.FromMinutes(stay).TotalMilliseconds;
+            lock (_gate)
+                return _placed.Where(p => _placedAt.TryGetValue(p.Key, out long at) && nowMs - at >= limit)
+                              .Select(p => (p.Key, p.Value.Map, p.Value.Group)).ToList();
+        }
+
+        /// <summary>He moved on, unbeaten: he stands nowhere and waits his next chance, like one that did not come back.</summary>
+        public static void Left(int monster, long nowMs)
+        {
+            lock (_gate)
+            {
+                if (!_placed.Remove(monster)) return;
+                _placedAt.Remove(monster);
+                _lastStood.Remove(monster);
+                long back = nowMs + RetryMs(ServerSettings.Current);
+                _awayUntil[monster] = _awayUntil.TryGetValue(monster, out long until) ? Math.Max(until, back) : back;
+                _dirty = true;
+            }
+        }
+
+        /// <summary>
+        /// Keeps the absences in this file from now on, and takes back the ones it holds that are not
+        /// over: a criminal beaten before a restart stays away his hours after it.
+        /// </summary>
+        public static void KeepAbsencesIn(string path, long nowMs)
+        {
+            lock (_gate)
+            {
+                _store = path;
+                try
+                {
+                    if (!File.Exists(path)) return;
+                    var kept = JsonSerializer.Deserialize<Dictionary<int, long>>(File.ReadAllText(path));
+                    int back = 0;
+                    foreach (var (monster, until) in kept ?? new())
+                    {
+                        if (until <= nowMs || !_byMonster.ContainsKey(monster)) continue;
+                        _awayUntil[monster] = _awayUntil.TryGetValue(monster, out long already) ? Math.Max(already, until) : until;
+                        back++;
+                    }
+                    Console.WriteLine($"[Wanted] {back} criminal(s) still away since the last start.");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Wanted] Could not read {Path.GetFileName(path)}: {ex.Message}");
+                }
+            }
+        }
+
+        /// <summary>Writes the absences down, when they changed and there is somewhere to keep them.</summary>
+        public static void Flush()
+        {
+            lock (_gate)
+            {
+                if (!_dirty || _store == null) return;
+                _dirty = false;
+                try
+                {
+                    long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    var keep = _awayUntil.Where(p => p.Value > now).ToDictionary(p => p.Key, p => p.Value);
+                    Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(_store))!);
+                    string temporary = _store + ".tmp";
+                    File.WriteAllText(temporary, JsonSerializer.Serialize(keep));
+                    File.Move(temporary, _store, overwrite: true);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Wanted] Could not keep the absences: {ex.Message}");
+                }
+            }
         }
 
         /// <summary>

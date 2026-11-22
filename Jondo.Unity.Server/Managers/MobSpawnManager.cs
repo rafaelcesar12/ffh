@@ -1903,8 +1903,26 @@ namespace Jondo.Unity.Server.Managers
             if (nowMs < _criminalsDueAt || MapManager.Maps.Count == 0) return 0;
             _criminalsDueAt = nowMs + 60_000;
 
-            var due = WantedPosters.Due(nowMs);
-            if (due.Count == 0) return 0;
+            // FFH: who has stood long enough moves on, unless his group is fighting.
+            int left = 0;
+            foreach (var (monster, map, groupId) in WantedPosters.Overstayed(nowMs))
+            {
+                if (Handlers.FightHandler.IsGroupFighting(groupId)) continue;
+                TakeCriminalOut(monster, map, groupId);
+                WantedPosters.Left(monster, nowMs);
+                left++;
+            }
+            if (left > 0) Console.WriteLine($"[Wanted] {left} criminal(s) moved on.");
+
+            // Shuffled: in an area with room for one, the lowest id would always win it.
+            var due = WantedPosters.Due(nowMs).OrderBy(_ => _rand.Next()).ToList();
+            if (due.Count == 0) { WantedPosters.Flush(); return 0; }
+
+            bool onePerArea = ServerSettings.Current.WantedOnePerArea;
+            var areasTaken = new HashSet<int>();
+            if (onePerArea)
+                foreach (var standing in WantedPosters.Standing())
+                    if (WantedPosters.ByMonster(standing.Monster) is { } who) areasTaken.Add(AreaKey(who));
 
             var zones = new Dictionary<int, List<long>>();
             foreach (long mapId in _mapMobs.Keys)
@@ -1919,6 +1937,8 @@ namespace Jondo.Unity.Server.Managers
             foreach (var criminal in due)
             {
                 if (!_monsters.TryGetValue(criminal.Monster, out var data) || data.Grades.Count == 0) continue;
+                // His area has one about already: he waits, without spending his chance.
+                if (onePerArea && areasTaken.Contains(AreaKey(criminal))) continue;
                 if (!WantedPosters.ComesBack(criminal.Monster, nowMs, _rand)) continue;
                 var candidates = new List<(long Map, MobGroup Group)>();
                 foreach (int zone in criminal.Subareas)
@@ -1936,19 +1956,60 @@ namespace Jondo.Unity.Server.Managers
                 // list GetMobsForMap hands out is a copy, its groups are not), and changing a list
                 // somebody is walking throws.
                 var members = new List<MobMember>(chosen.Members);
-                members[_rand.Next(members.Count)] = new MobMember
+                int slot = _rand.Next(members.Count);
+                _swappedForCriminal[criminal.Monster] = members[slot];
+                members[slot] = new MobMember
                 {
                     Monster = data,
                     GradeIndex = grade,
                     Level = data.Grades[grade].Level,
                 };
                 chosen.Members = members;
-                WantedPosters.Placed(criminal.Monster, where, chosen.MobId);
+                WantedPosters.Placed(criminal.Monster, where, chosen.MobId, nowMs);
+                if (onePerArea) areasTaken.Add(AreaKey(criminal));
                 placed++;
             }
 
+            WantedPosters.Flush();
             if (placed > 0) Console.WriteLine($"[Wanted] {placed} criminal(s) back in their zones.");
             return placed;
+        }
+
+        /// <summary>The member each standing criminal took the place of, to give it back when he moves on.</summary>
+        private static readonly Dictionary<int, MobMember> _swappedForCriminal = new();
+
+        /// <summary>A criminal's area, or his zone's own key when the area is not known.</summary>
+        private static int AreaKey(WantedPosters.Criminal criminal)
+        {
+            int zone = criminal.Subareas.Count > 0 ? criminal.Subareas[0] : 0;
+            int area = Interactives.AreaOfSubArea(zone);
+            return area >= 0 ? area : -1_000_000 - zone;
+        }
+
+        /// <summary>Gives the criminal's place in his group back to the member he took it from. Under the lock.</summary>
+        private static void TakeCriminalOut(int monster, long mapId, long groupId)
+        {
+            _swappedForCriminal.Remove(monster, out var before);
+            if (!_mapMobs.TryGetValue(mapId, out var groups)) return;
+            var group = groups.Find(g => g.MobId == groupId);
+            if (group == null) return;
+            int slot = group.Members.FindIndex(m => m.Monster?.Id == monster);
+            if (slot < 0) return;
+            var members = new List<MobMember>(group.Members);
+            if (before != null) members[slot] = before;
+            else if (members.Count > 1) members.RemoveAt(slot);
+            else return;
+            group.Members = members;
+        }
+
+        /// <summary>For the tests: the criminals who have stood long enough move on now, and the due ones are placed.</summary>
+        internal static int RotateCriminalsNow(long nowMs)
+        {
+            lock (_candado)
+            {
+                _criminalsDueAt = 0;
+                return PlaceCriminals(nowMs);
+            }
         }
 
         /// <summary>
