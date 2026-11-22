@@ -268,7 +268,14 @@ namespace Jondo.Unity.Server
                 // without it nobody who downloads the emulator can try the administration
                 // commands. Whoever opens a server to the outside (JONDO_PUBLIC_BIND=1) has to
                 // change that password or delete the account first; the README says so.
-                if (!AccountExists(TestAccountLogin))
+                // FFH: a server friends sign in to has no account whose password is in the repository.
+                if (!ServerSettings.Current.TestAccount)
+                {
+                    if (LockTestAccount(authConnection))
+                        Console.WriteLine($"[DatabaseManager] Test account {TestAccountLogin} locked: its published " +
+                                          "password no longer works and it is no longer an administrator.");
+                }
+                else if (!AccountExists(TestAccountLogin))
                 {
                     if (RegisterNewAccount(TestAccountLogin, TestAccountPassword, "Keka", "", out string porQue,
                                            id: TestAccountId))
@@ -277,12 +284,13 @@ namespace Jondo.Unity.Server
                         Console.WriteLine($"[DatabaseManager] Could not create the test account: {porQue}");
                 }
 
-                // And the two who run the server are administrators: keka, and dragonlord once he
-                // has signed up. In ANY installation, whoever holds one of those two logins is an
-                // administrator at the next start -- the same caveat as the test account's.
+                // And the test account is an administrator, while there is one. FFH: no longer
+                // «dragonlord» too -- upstream's developer's login made whoever signed up with it an
+                // administrator at the next start, on any server.
                 var duenos = authConnection.CreateCommand();
-                duenos.CommandText = "UPDATE Accounts SET Role = $admin " +
-                                     "WHERE Login IN ('keka', 'dragonlord') AND Role < $admin;";
+                duenos.CommandText = ServerSettings.Current.TestAccount
+                    ? "UPDATE Accounts SET Role = $admin WHERE Login = 'keka' AND Role < $admin;"
+                    : "SELECT 0;";
                 duenos.Parameters.AddWithValue("$admin", Roles.Administrador);
                 int promovidos = duenos.ExecuteNonQuery();
                 if (promovidos > 0) Console.WriteLine($"[DatabaseManager] {promovidos} account(s) made administrator.");
@@ -1492,6 +1500,32 @@ namespace Jondo.Unity.Server
                 Console.WriteLine($"[DatabaseManager] Could not change the role of {login}: {ex.Message}");
                 return false;
             }
+        }
+
+        /// <summary>
+        /// FFH: the test account, if it still has the published password, gets one nobody knows and
+        /// stops being an administrator; its characters stay. True when it was locked now.
+        /// </summary>
+        internal static bool LockTestAccount(SqliteConnection auth)
+        {
+            using var read = auth.CreateCommand();
+            read.CommandText = "SELECT Id, Password FROM Accounts WHERE LOWER(Login) = $login;";
+            read.Parameters.AddWithValue("$login", TestAccountLogin);
+            long id; string stored;
+            using (var row = read.ExecuteReader())
+            {
+                if (!row.Read()) return false;
+                id = row.GetInt64(0);
+                stored = row.IsDBNull(1) ? "" : row.GetString(1);
+            }
+            if (!Claves.Comprueba(TestAccountPassword, stored, out _)) return false;
+
+            using var write = auth.CreateCommand();
+            write.CommandText = "UPDATE Accounts SET Password = $pass, Role = 1, GameToken = NULL WHERE Id = $id;";
+            write.Parameters.AddWithValue("$pass",
+                Claves.Cifrar(Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16))));
+            write.Parameters.AddWithValue("$id", id);
+            return write.ExecuteNonQuery() == 1;
         }
 
         /// <summary>The test account every installation comes with: see where Initialize creates it.</summary>

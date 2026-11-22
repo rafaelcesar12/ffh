@@ -16,6 +16,12 @@ namespace Jondo.Unity.Server
     {
         public const int DefaultRetention = 5;
 
+        /// <summary>
+        /// FFH: besides the newest <see cref="DefaultRetention"/>, the last set of each of these many
+        /// days is kept, so a day of restarts does not take every older copy with it.
+        /// </summary>
+        public const int DefaultDailyRetention = 14;
+
         public sealed class Result
         {
             public string Directory { get; init; } = "";
@@ -37,7 +43,7 @@ namespace Jondo.Unity.Server
             {
                 Result result = Create(databases, Paths.DatabaseBackupsDir, DefaultRetention);
                 Console.WriteLine($"[SQLite] Verified backup created in {result.Directory} " +
-                                  $"({result.Files.Count} database(s), keeping {DefaultRetention}).");
+                                  $"({result.Files.Count} database(s), keeping {DefaultRetention} and one a day for {DefaultDailyRetention} days).");
                 return result;
             }
             catch (Exception ex)
@@ -51,7 +57,8 @@ namespace Jondo.Unity.Server
         /// <summary>Creates and verifies one backup set, then removes sets beyond retention.</summary>
         public static Result Create(IEnumerable<string> databases, string backupsDirectory,
                                     int retention = DefaultRetention,
-                                    Func<DateTimeOffset>? clock = null)
+                                    Func<DateTimeOffset>? clock = null,
+                                    int days = DefaultDailyRetention)
         {
             if (databases == null) throw new ArgumentNullException(nameof(databases));
             if (string.IsNullOrWhiteSpace(backupsDirectory))
@@ -108,7 +115,7 @@ namespace Jondo.Unity.Server
                     }, new JsonSerializerOptions { WriteIndented = true }));
 
                 Directory.Move(temporaryDirectory, finalDirectory);
-                Rotate(root, retention);
+                Rotate(root, retention, days);
 
                 return new Result
                 {
@@ -179,7 +186,7 @@ namespace Jondo.Unity.Server
             return candidate;
         }
 
-        private static void Rotate(string root, int retention)
+        private static void Rotate(string root, int retention, int days)
         {
             string normalizedRoot = Path.GetFullPath(root);
             string prefix = Path.EndsInDirectorySeparator(normalizedRoot)
@@ -190,7 +197,18 @@ namespace Jondo.Unity.Server
                 .OrderByDescending(directory => directory.Name, StringComparer.Ordinal)
                 .ToList();
 
-            foreach (var stale in sets.Skip(retention))
+            // The newest of each day, for the last «days» days counted from the newest set.
+            var keep = new HashSet<string>(sets.Take(retention).Select(d => d.Name), StringComparer.Ordinal);
+            if (days > 0 && sets.Count > 0)
+            {
+                string last = sets[0].Name.Substring(0, 8);
+                string first = DateTime.ParseExact(last, "yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture)
+                                       .AddDays(1 - days).ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture);
+                foreach (var day in sets.GroupBy(d => d.Name.Substring(0, 8)))
+                    if (string.CompareOrdinal(day.Key, first) >= 0) keep.Add(day.First().Name);
+            }
+
+            foreach (var stale in sets.Where(d => !keep.Contains(d.Name)))
             {
                 string target = Path.GetFullPath(stale.FullName);
                 if (!target.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))

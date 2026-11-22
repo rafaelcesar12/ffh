@@ -146,6 +146,12 @@ namespace Jondo.Unity.Server
         public bool WantedOnePerArea { get; set; }
 
         /// <summary>
+        /// The test account keka / test, administrator, created on every start. FFH: off on a server
+        /// others sign in to -- the password is in the repository; an existing keka with it is locked.
+        /// </summary>
+        public bool TestAccount { get; set; } = true;
+
+        /// <summary>
         /// The hero mode (<see cref="Managers.Heroes"/>): the other characters of one's account
         /// connected beside one's own, fighting at one's side and played by hand in their turns.
         /// </summary>

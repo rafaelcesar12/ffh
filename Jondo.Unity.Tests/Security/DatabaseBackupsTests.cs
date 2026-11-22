@@ -50,6 +50,41 @@ namespace Jondo.Unity.Tests.Security
             }
         }
 
+        /// <summary>FFH: a day of restarts leaves the last set of each earlier day, for the days kept.</summary>
+        [Fact]
+        public void Rotation_keeps_the_last_set_of_each_recent_day()
+        {
+            string root = TemporaryDirectory();
+            try
+            {
+                string database = CreateDatabase(root, "world.db", "value");
+                string backups = Path.Combine(root, "backups");
+                // Two sets a day for five days, then six restarts on the last one.
+                for (int day = 1; day <= 5; day++)
+                    foreach (int hour in new[] { 8, 20 })
+                    {
+                        int d = day, h = hour;
+                        DatabaseBackups.Create(new[] { database }, backups, retention: 2,
+                            clock: () => new DateTimeOffset(2026, 11, d, h, 0, 0, TimeSpan.Zero), days: 3);
+                    }
+                for (int minute = 0; minute < 6; minute++)
+                {
+                    int m = minute;
+                    DatabaseBackups.Create(new[] { database }, backups, retention: 2,
+                        clock: () => new DateTimeOffset(2026, 11, 6, 12, m, 0, TimeSpan.Zero), days: 3);
+                }
+
+                string[] sets = Directory.GetDirectories(backups, "2026*")
+                    .Select(Path.GetFileName).OrderBy(name => name, StringComparer.Ordinal).ToArray()!;
+                Assert.Equal(new[] { "20261104-200000-000", "20261105-200000-000",
+                                     "20261106-120400-000", "20261106-120500-000" }, sets);
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
         [Fact]
         public void Rotation_keeps_only_the_newest_complete_sets()
         {
