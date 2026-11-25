@@ -165,6 +165,22 @@ namespace Jondo.Unity.Launcher.UI
         /// </summary>
         public static LauncherTexts Textos => LauncherTexts.Get(Language);
 
+        /// <summary>
+        /// FFH: the server this build was made for (the release's JONDO_SERVER), or empty. Only the
+        /// setup reads it, to come with it chosen: what is saved afterwards is what counts.
+        /// </summary>
+        public static string BuiltServer
+        {
+            get
+            {
+                foreach (var meta in typeof(LauncherPreferences).Assembly
+                             .GetCustomAttributes(typeof(System.Reflection.AssemblyMetadataAttribute), false))
+                    if (meta is System.Reflection.AssemblyMetadataAttribute { Key: "JondoServer" } server)
+                        return (server.Value ?? "").Trim();
+                return "";
+            }
+        }
+
         /// <summary>Whether the server is this machine's, which is what decides whether it can be started.</summary>
         public static bool ServerIsLocal => IsThisMachine(ServerHost);
 

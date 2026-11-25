@@ -31,6 +31,9 @@
     <!-- The GitHub repository updates are looked for in until the player names another; the
          release workflow passes its own. -->
     <JondoRepository Condition="'$(JondoRepository)' == ''">Keka-Bron/JondoEmu</JondoRepository>
+    <!-- FFH: the server a friend's setup comes pointed at (the release workflow passes the
+         repository's JONDO_SERVER variable); empty, the setup asks as always. -->
+    <JondoServer Condition="'$(JondoServer)' == ''"></JondoServer>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
 
@@ -48,6 +51,7 @@
 
   <ItemGroup>
     <AssemblyMetadata Include="JondoRepository" Value="$(JondoRepository)" />
+    <AssemblyMetadata Include="JondoServer" Value="$(JondoServer)" />
     <!-- The background and the theme inside the executable: the setup is downloaded alone. -->
     <EmbeddedResource Include="../launcher_assets/bg.jpg" LogicalName="JondoAssets.bg.jpg" />
     <EmbeddedResource Include="../launcher_assets/theme.mp3" LogicalName="JondoAssets.theme.mp3" />

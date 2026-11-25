@@ -141,6 +141,13 @@ namespace Jondo.Unity.Launcher.UI
             _descargarCliente = encontrado.Length == 0;
             _servidorRemoto = !LauncherPreferences.ServerIsLocal;
             CampoServidorInstalar.Text = _servidorRemoto ? LauncherPreferences.ServerHost : "";
+            // FFH: a build made for a friend's server comes with it chosen; installing is one click.
+            if (!_servidorRemoto && LauncherPreferences.BuiltServer is { Length: > 0 } hecho
+                && !LauncherPreferences.IsThisMachine(hecho))
+            {
+                _servidorRemoto = true;
+                CampoServidorInstalar.Text = hecho;
+            }
             CampoRepositorio.Text = ReleaseFeed.DefaultRepository;
             RefrescarInstalador();
             if (_descargarCliente) _ = MedirElClienteAsync();

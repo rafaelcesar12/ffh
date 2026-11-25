@@ -119,6 +119,7 @@ jobs:
             dotnet publish "$project/$project.csproj" --configuration Release --no-restore `
               -p:Version=${{ steps.version.outputs.version }} `
               -p:JondoRepository=${{ github.repository }} `
+              -p:JondoServer=${{ vars.JONDO_SERVER }} `
               -p:SkipTests=true
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
